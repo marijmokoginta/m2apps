@@ -9,7 +9,6 @@ import (
 	"m2apps/internal/ui"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -30,7 +29,7 @@ func Update(appID string) error {
 		return fmt.Errorf("failed to load app metadata: %w", err)
 	}
 
-	channel := normalizeChannel(config.Channel)
+	channel := github.NormalizeChannel(config.Channel)
 	fmt.Println(ui.Info(fmt.Sprintf("[INFO] Checking update (channel: %s)...", channel)))
 
 	owner, repo, err := github.ParseRepo(config.Repo)
@@ -39,28 +38,10 @@ func Update(appID string) error {
 	}
 
 	client := github.NewClient(config.Token)
-	releases, err := client.GetAllReleases(owner, repo)
+	target, err := github.SelectLatestReleaseByChannel(client, owner, repo, channel)
 	if err != nil {
 		return err
 	}
-	if len(releases) == 0 {
-		return fmt.Errorf("no releases available for repository %s", config.Repo)
-	}
-
-	candidates, err := filterChannelReleases(releases, channel)
-	if err != nil {
-		return err
-	}
-	if len(candidates) == 0 {
-		return fmt.Errorf("no matching release found for channel %s", channel)
-	}
-
-	sort.Slice(candidates, func(i, j int) bool {
-		cmp, _ := CompareTags(candidates[i].TagName, candidates[j].TagName)
-		return cmp > 0
-	})
-
-	target := candidates[0]
 	fmt.Println(ui.Info(fmt.Sprintf("[INFO] Current: %s", config.Version)))
 	fmt.Println(ui.Info(fmt.Sprintf("[INFO] Latest:  %s", target.TagName)))
 
@@ -73,9 +54,9 @@ func Update(appID string) error {
 		return nil
 	}
 
-	asset, err := github.FindAsset(&target, config.Asset)
+	asset, err := github.FindAsset(target, config.Asset)
 	if err != nil {
-		return err
+		return fmt.Errorf("Asset not found in selected release")
 	}
 
 	stageRoot := filepath.Join(filepath.Dir(config.InstallPath), ".m2apps_update_stage", config.AppID)
@@ -124,24 +105,6 @@ func Update(appID string) error {
 
 	fmt.Println(ui.Success("[OK] Update completed"))
 	return nil
-}
-
-func filterChannelReleases(releases []github.Release, channel string) ([]github.Release, error) {
-	var filtered []github.Release
-
-	for _, release := range releases {
-		if !MatchChannel(release, channel) {
-			continue
-		}
-
-		if _, err := CompareTags(release.TagName, release.TagName); err != nil {
-			return nil, fmt.Errorf("invalid release version %q: %w", release.TagName, err)
-		}
-
-		filtered = append(filtered, release)
-	}
-
-	return filtered, nil
 }
 
 func replaceInstall(candidatePath string, installPath string) error {

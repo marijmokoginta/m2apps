@@ -10,7 +10,6 @@ import (
 )
 
 type Client interface {
-	GetLatestRelease(owner, repo string) (*Release, error)
 	GetReleaseByTag(owner, repo, tag string) (*Release, error)
 	GetAllReleases(owner, repo string) ([]Release, error)
 }
@@ -27,11 +26,6 @@ func NewClient(token string) Client {
 		token:      strings.TrimSpace(token),
 		baseURL:    "https://api.github.com",
 	}
-}
-
-func (c *APIClient) GetLatestRelease(owner, repo string) (*Release, error) {
-	path := fmt.Sprintf("/repos/%s/%s/releases/latest", owner, repo)
-	return c.fetchRelease(path)
 }
 
 func (c *APIClient) GetReleaseByTag(owner, repo, tag string) (*Release, error) {

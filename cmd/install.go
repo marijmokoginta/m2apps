@@ -36,10 +36,7 @@ var installCmd = &cobra.Command{
 			return
 		}
 
-		channel := strings.ToLower(strings.TrimSpace(cfg.Channel))
-		if channel == "" {
-			channel = "stable"
-		}
+		channel := github.NormalizeChannel(cfg.Channel)
 
 		fmt.Println(ui.Success("[OK] Config loaded"))
 		fmt.Printf("%s %s\n", ui.Info("[INFO] App:"), cfg.Name)
@@ -73,18 +70,20 @@ var installCmd = &cobra.Command{
 		ghClient := github.NewClient(cfg.Auth.Value)
 
 		fmt.Println()
-		release, err := fetchRelease(ghClient, owner, repo, cfg.Source.Version)
+		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Channel: %s", channel)))
+		fmt.Println(ui.Info("[INFO] Resolving latest version..."))
+		release, err := github.SelectLatestReleaseByChannel(ghClient, owner, repo, channel)
 		if err != nil {
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			fmt.Println(ui.Error("[ERROR] Installation aborted."))
 			os.Exit(1)
 		}
 
-		fmt.Printf("%s %s\n", ui.Success("[OK] Found version:"), release.TagName)
+		fmt.Printf("%s %s\n", ui.Success("[OK] Selected version:"), release.TagName)
 
 		asset, err := github.FindAsset(release, cfg.Source.Asset)
 		if err != nil {
-			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Asset not found in selected release"))
 			fmt.Println(ui.Error("[ERROR] Installation aborted."))
 			os.Exit(1)
 		}
@@ -194,16 +193,6 @@ func formatRequirementLabel(res requirements.Result) string {
 		return res.Name
 	}
 	return fmt.Sprintf("%s %s", res.Name, res.Required)
-}
-
-func fetchRelease(client github.Client, owner, repo, version string) (*github.Release, error) {
-	if strings.EqualFold(strings.TrimSpace(version), "latest") {
-		fmt.Println(ui.Info("[INFO] Fetching latest release..."))
-		return client.GetLatestRelease(owner, repo)
-	}
-
-	fmt.Printf("%s %s...\n", ui.Info("[INFO] Fetching release tag"), version)
-	return client.GetReleaseByTag(owner, repo, version)
 }
 
 func printDownloadProgress(read, total int64) {
