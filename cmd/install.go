@@ -5,6 +5,7 @@ import (
 	"m2apps/internal/config"
 	"m2apps/internal/downloader"
 	"m2apps/internal/github"
+	"m2apps/internal/installer"
 	"m2apps/internal/requirements"
 	_ "m2apps/internal/requirements/checkers"
 	"os"
@@ -94,6 +95,28 @@ var installCmd = &cobra.Command{
 
 		fmt.Println()
 		fmt.Println("Download completed.")
+
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Println("Error:", err)
+			fmt.Println("Installation aborted.")
+			os.Exit(1)
+		}
+
+		installCtx := installer.InstallContext{
+			ZipPath:   dest,
+			TargetDir: cwd,
+			Preset:    cfg.Preset,
+			AppID:     cfg.AppID,
+		}
+
+		if err := installer.Install(installCtx); err != nil {
+			fmt.Println("Error:", err)
+			fmt.Println("Installation aborted.")
+			os.Exit(1)
+		}
+
+		fmt.Println("Installation completed.")
 	},
 }
 
