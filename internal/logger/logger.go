@@ -2,6 +2,7 @@ package logger
 
 import (
 	"fmt"
+	"m2apps/internal/system"
 	"os"
 	"path/filepath"
 )
@@ -9,12 +10,7 @@ import (
 var logFile *os.File
 
 func Init() error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get user home directory: %w", err)
-	}
-
-	logDir := filepath.Join(home, ".m2apps", "logs")
+	logDir := system.GetLogDir()
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create log directory: %w", err)
 	}

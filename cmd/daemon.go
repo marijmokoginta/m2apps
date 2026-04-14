@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"m2apps/internal/daemon"
+	"m2apps/internal/service"
 	"m2apps/internal/ui"
 	"os"
 	"os/signal"
@@ -15,6 +16,19 @@ import (
 var daemonCmd = &cobra.Command{
 	Use:   "daemon",
 	Short: "Manage M2Apps background daemon",
+}
+
+var daemonInstallCmd = &cobra.Command{
+	Use:   "install",
+	Short: "Install OS service stub for daemon integration",
+	Run: func(cmd *cobra.Command, args []string) {
+		manager := service.NewServiceManager()
+		if err := manager.Install(); err != nil {
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			os.Exit(1)
+		}
+		fmt.Println(ui.Success("[OK] Service install completed"))
+	},
 }
 
 var daemonStartCmd = &cobra.Command{
@@ -106,6 +120,7 @@ var daemonRunCmd = &cobra.Command{
 }
 
 func init() {
+	daemonCmd.AddCommand(daemonInstallCmd)
 	daemonCmd.AddCommand(daemonStartCmd)
 	daemonCmd.AddCommand(daemonStopCmd)
 	daemonCmd.AddCommand(daemonStatusCmd)

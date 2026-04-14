@@ -1,9 +1,8 @@
 package checkers
 
 import (
-	"errors"
 	"fmt"
-	"os/exec"
+	"m2apps/internal/system"
 	"strings"
 
 	"m2apps/internal/requirements"
@@ -40,10 +39,9 @@ func checkTool(displayName, command string, args []string, constraint string) (r
 }
 
 func runVersionCommand(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := system.CombinedOutput(name, args...)
 	if err != nil {
-		if errors.Is(err, exec.ErrNotFound) || strings.Contains(err.Error(), "executable file not found") {
+		if system.IsCommandNotFound(err) {
 			return "", fmt.Errorf("not found")
 		}
 

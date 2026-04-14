@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
+	"m2apps/internal/system"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,13 +14,8 @@ type FileStorage struct {
 }
 
 func New() (Storage, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get user home directory: %w", err)
-	}
-
-	baseDir := filepath.Join(home, ".m2apps")
-	if err := os.MkdirAll(filepath.Join(baseDir, "apps"), 0o755); err != nil {
+	baseDir := system.GetBaseDir()
+	if err := os.MkdirAll(system.GetAppsDir(), 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create storage directory: %w", err)
 	}
 

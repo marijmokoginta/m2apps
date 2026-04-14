@@ -3,10 +3,9 @@ package preset
 import (
 	"fmt"
 	"m2apps/internal/logger"
+	"m2apps/internal/system"
 	"m2apps/internal/ui"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 )
 
@@ -34,7 +33,7 @@ func RunSteps(steps []Step, workDir string) error {
 			return fmt.Errorf("failed to write step log: %w", err)
 		}
 
-		cmd := buildShellCommand(commandLine)
+		cmd := system.NewShellCommand(commandLine)
 		cmd.Dir = workDir
 		cmd.Stdout = logWriter
 		cmd.Stderr = logWriter
@@ -56,11 +55,4 @@ func RunSteps(steps []Step, workDir string) error {
 	}
 
 	return nil
-}
-
-func buildShellCommand(command string) *exec.Cmd {
-	if runtime.GOOS == "windows" {
-		return exec.Command("cmd", "/C", command)
-	}
-	return exec.Command("sh", "-c", command)
 }

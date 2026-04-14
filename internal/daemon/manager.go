@@ -9,9 +9,9 @@ import (
 	"m2apps/internal/api"
 	"m2apps/internal/progress"
 	"m2apps/internal/storage"
+	"m2apps/internal/system"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -28,12 +28,7 @@ type Manager struct {
 }
 
 func NewManager() (*Manager, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get user home directory: %w", err)
-	}
-
-	base := filepath.Join(home, ".m2apps", "daemon")
+	base := system.GetDaemonDir()
 	return &Manager{
 		baseDir:  base,
 		pidFile:  filepath.Join(base, "daemon.pid"),
@@ -64,7 +59,7 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("failed to resolve executable path: %w", err)
 	}
 
-	cmd := exec.Command(execPath, "daemon", "run")
+	cmd := system.NewProcessCommand(execPath, "daemon", "run")
 	devNull, _ := os.OpenFile(os.DevNull, os.O_WRONLY, 0o644)
 	if devNull != nil {
 		defer devNull.Close()
