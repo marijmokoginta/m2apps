@@ -15,9 +15,13 @@ var updateCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		appID := args[0]
-		if err := updater.Update(appID); err != nil {
+		if err := runUpdate(appID); err != nil {
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			os.Exit(1)
 		}
 	},
+}
+
+func runUpdate(appID string) error {
+	return updater.Update(appID)
 }

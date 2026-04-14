@@ -39,21 +39,26 @@ jobs:
             windows-amd64)
               GOOS=windows GOARCH=amd64 go build -o dist/m2apps-windows-amd64.exe ./main.go
               cp dist/m2apps-windows-amd64.exe dist/windows/m2apps.exe
-              (cd dist/windows && zip -r ../m2apps-windows-amd64.zip m2apps.exe)
+              cp install.ps1 dist/windows/install.ps1
+              (cd dist/windows && zip -r ../m2apps-windows-amd64.zip m2apps.exe install.ps1)
               echo "ASSET_FILE=m2apps-windows-amd64.zip" >> "$GITHUB_ENV"
               ;;
             linux-amd64)
               GOOS=linux GOARCH=amd64 go build -o dist/m2apps-linux-amd64 ./main.go
               cp dist/m2apps-linux-amd64 dist/linux/m2apps
               chmod +x dist/linux/m2apps
-              (cd dist/linux && tar -czf ../m2apps-linux-amd64.tar.gz m2apps)
+              cp install.sh dist/linux/install.sh
+              chmod +x dist/linux/install.sh
+              (cd dist/linux && tar -czf ../m2apps-linux-amd64.tar.gz m2apps install.sh)
               echo "ASSET_FILE=m2apps-linux-amd64.tar.gz" >> "$GITHUB_ENV"
               ;;
             darwin-amd64)
               GOOS=darwin GOARCH=amd64 go build -o dist/m2apps-darwin-amd64 ./main.go
               cp dist/m2apps-darwin-amd64 dist/macos/m2apps
               chmod +x dist/macos/m2apps
-              (cd dist/macos && tar -czf ../m2apps-darwin-amd64.tar.gz m2apps)
+              cp install.sh dist/macos/install.sh
+              chmod +x dist/macos/install.sh
+              (cd dist/macos && tar -czf ../m2apps-darwin-amd64.tar.gz m2apps install.sh)
               echo "ASSET_FILE=m2apps-darwin-amd64.tar.gz" >> "$GITHUB_ENV"
               ;;
             *)
@@ -80,6 +85,20 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Read changelog
+        id: changelog
+        shell: bash
+        run: |
+          FILE="changelog/${{ github.ref_name }}.md"
+          if [ ! -f "$FILE" ]; then
+            echo "Changelog file not found!"
+            exit 1
+          fi
+
+          echo "body<<EOF" >> "$GITHUB_OUTPUT"
+          cat "$FILE" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         id: create_release
         uses: actions/create-release@v1
@@ -88,6 +107,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           release_name: Release ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.body }}
           draft: false
           prerelease: false
 
