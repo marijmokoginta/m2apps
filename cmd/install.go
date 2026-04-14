@@ -38,6 +38,25 @@ var installCmd = &cobra.Command{
 			return
 		}
 
+		store, err := storage.New()
+		if err != nil {
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
+			os.Exit(1)
+		}
+
+		exists, err := store.Exists(cfg.AppID)
+		if err != nil {
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
+			os.Exit(1)
+		}
+		if exists {
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] Application with app_id '%s' is already installed.", cfg.AppID)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
+			os.Exit(1)
+		}
+
 		channel := github.NormalizeChannel(cfg.Channel)
 
 		fmt.Println(ui.Success("[OK] Config loaded"))
@@ -120,13 +139,6 @@ var installCmd = &cobra.Command{
 		}
 
 		if err := installer.Install(installCtx); err != nil {
-			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
-			fmt.Println(ui.Error("[ERROR] Installation aborted."))
-			os.Exit(1)
-		}
-
-		store, err := storage.New()
-		if err != nil {
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			fmt.Println(ui.Error("[ERROR] Installation aborted."))
 			os.Exit(1)

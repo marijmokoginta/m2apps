@@ -2,5 +2,6 @@
 .gomodcache/
 /tmp/
 /bin/
+/dist/
 *.exe
 *.out

@@ -67,10 +67,7 @@ func (m *Manager) Start() error {
 		cmd.Stderr = devNull
 	}
 	cmd.Env = append(os.Environ(), "M2APPS_DAEMON=1")
-
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	}
+	configureDaemonProcess(cmd)
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start daemon process: %w", err)

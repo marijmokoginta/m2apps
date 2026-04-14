@@ -35,6 +35,55 @@ m2apps daemon status
 m2apps daemon stop
 ```
 
+## Release Workflow (GitHub)
+
+The release workflow is defined in `.github/workflows/release.yml` and runs automatically when a tag matching `v*` is pushed.
+
+### Prerequisites
+
+```bash
+git remote -v
+```
+
+Make sure the `origin` remote points to the correct GitHub repository.
+
+### How to Trigger Release
+
+1. Commit the changes you want to release.
+2. Push the main branch to GitHub.
+3. Create a semantic version tag (`v1.0.0`, `v1.1.0`, etc.).
+4. Push the tag to GitHub.
+
+Example:
+
+```bash
+git add -A
+git commit -m "Prepare release v1.0.0"
+git push origin main
+
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+After the tag is pushed:
+
+- GitHub Actions will build the following targets:
+  - `windows-amd64`
+  - `linux-amd64`
+  - `darwin-amd64`
+- The workflow will create a GitHub Release with these assets:
+  - `m2apps-windows-amd64.zip`
+  - `m2apps-linux-amd64.tar.gz`
+  - `m2apps-darwin-amd64.tar.gz`
+
+### Local Build (Manual)
+
+```bash
+./scripts/build-release.sh
+```
+
+This script generates binaries and release archives in the `dist/` directory.
+
 ## install.json Example
 
 ```json

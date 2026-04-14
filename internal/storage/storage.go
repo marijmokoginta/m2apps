@@ -81,3 +81,21 @@ func (s *FileStorage) Load(appID string) (AppConfig, error) {
 
 	return cfg, nil
 }
+
+func (s *FileStorage) Exists(appID string) (bool, error) {
+	id := strings.TrimSpace(appID)
+	if id == "" {
+		return false, fmt.Errorf("app_id is required")
+	}
+
+	appDir := filepath.Join(s.baseDir, "apps", id)
+	info, err := os.Stat(appDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check app directory: %w", err)
+	}
+
+	return info.IsDir(), nil
+}

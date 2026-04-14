@@ -16,4 +16,5 @@ type AppConfig struct {
 type Storage interface {
 	Save(appID string, data AppConfig) error
 	Load(appID string) (AppConfig, error)
+	Exists(appID string) (bool, error)
 }
