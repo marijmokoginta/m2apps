@@ -14,6 +14,46 @@ M2Apps is a cross-platform CLI installer, updater, and deployment agent for appl
 
 ## Installation
 
+### Installer Script (Recommended)
+
+Linux/macOS:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/marijmokoginta/m2apps/main/install.sh
+chmod +x install.sh
+./install.sh
+```
+
+Windows (PowerShell as Administrator):
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/marijmokoginta/m2apps/main/install.ps1 -OutFile install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+Installer flow:
+
+1. Detect OS and architecture.
+2. Request `releases/latest` metadata from GitHub.
+3. Resolve the release asset for the current platform.
+4. Download the release archive.
+5. Extract the archive.
+6. Install `m2apps` to system path.
+7. Validate with `m2apps --version`.
+
+Current release assets:
+
+- `m2apps-windows-amd64.zip`
+- `m2apps-linux-amd64.tar.gz`
+- `m2apps-darwin-amd64.tar.gz`
+
+Note:
+
+- Current workflow publishes `amd64` assets only.
+- Linux/macOS `arm64` and Windows ARM are not published yet.
+
+### Manual Binary Installation
+
 1. Download the `m2apps` binary for your OS.
 2. Put it in a directory that is available in your `PATH`.
 3. Make sure the binary is executable (Linux/macOS).
