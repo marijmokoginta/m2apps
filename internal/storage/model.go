@@ -7,6 +7,7 @@ type AppConfig struct {
 	Repo        string `json:"repo"`
 	Asset       string `json:"asset"`
 	Token       string `json:"token"`
+	APIToken    string `json:"api_token"`
 	Version     string `json:"version"`
 	Channel     string `json:"channel"`
 	Preset      string `json:"preset"`

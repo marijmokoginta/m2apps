@@ -3,7 +3,9 @@ package cmd
 import (
 	"fmt"
 	"m2apps/internal/config"
+	"m2apps/internal/daemon"
 	"m2apps/internal/downloader"
+	"m2apps/internal/env"
 	"m2apps/internal/github"
 	"m2apps/internal/installer"
 	"m2apps/internal/requirements"
@@ -142,7 +144,53 @@ var installCmd = &cobra.Command{
 			Preset:      cfg.Preset,
 		}
 
+		daemonManager, err := daemon.NewManager()
+		if err != nil {
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
+			os.Exit(1)
+		}
+
+		fmt.Println(ui.Info("[INFO] Ensuring daemon is running..."))
+		if err := daemonManager.Start(); err != nil {
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
+			os.Exit(1)
+		}
+
+		port, err := daemonManager.Port()
+		if err != nil {
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
+			os.Exit(1)
+		}
+
+		apiToken, err := daemon.GenerateAPIToken()
+		if err != nil {
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
+			os.Exit(1)
+		}
+
+		appConfig.APIToken = apiToken
 		if err := store.Save(cfg.AppID, appConfig); err != nil {
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
+			os.Exit(1)
+		}
+
+		apiURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+		if err := env.Inject(cwd, map[string]string{
+			"M2APPS_API_URL":   apiURL,
+			"M2APPS_API_TOKEN": apiToken,
+			"M2APPS_APP_ID":    cfg.AppID,
+		}); err != nil {
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
+			os.Exit(1)
+		}
+
+		if err := daemonManager.RegisterApp(cfg.AppID); err != nil {
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			fmt.Println(ui.Error("[ERROR] Installation aborted."))
 			os.Exit(1)

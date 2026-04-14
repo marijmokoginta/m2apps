@@ -3,6 +3,7 @@ package installer
 import (
 	"fmt"
 	"m2apps/internal/logger"
+	"m2apps/internal/progress"
 	"m2apps/internal/ui"
 	"os"
 	"path/filepath"
@@ -13,10 +14,12 @@ import (
 )
 
 type InstallContext struct {
-	ZipPath   string
-	TargetDir string
-	Preset    string
-	AppID     string
+	ZipPath         string
+	TargetDir       string
+	Preset          string
+	AppID           string
+	ProgressManager *progress.Manager
+	ProgressAppID   string
 }
 
 func Install(ctx InstallContext) error {
@@ -45,6 +48,7 @@ func Install(ctx InstallContext) error {
 	}
 	defer os.RemoveAll(tempDir)
 
+	reportProgress(ctx, "install", "extracting files", 70, "Extracting files")
 	fmt.Println(ui.Info("[INFO] Extracting files..."))
 	if err := extractor.ExtractZip(ctx.ZipPath, tempDir); err != nil {
 		return fmt.Errorf("failed to extract zip: %w", err)
@@ -56,12 +60,14 @@ func Install(ctx InstallContext) error {
 		return err
 	}
 
+	reportProgress(ctx, "install", "running preset", 78, "Running preset")
 	fmt.Println(ui.Info("[INFO] Running installation preset..."))
 	if err := preset.RunSteps(steps, tempDir); err != nil {
 		return err
 	}
 	fmt.Println(ui.Success("[OK] Preset execution completed"))
 
+	reportProgress(ctx, "install", "moving installed files", 86, "Moving installed files")
 	fmt.Println(ui.Info("[INFO] Moving installed files..."))
 	if err := moveExtractedFiles(tempDir, targetDir); err != nil {
 		return fmt.Errorf("failed to move installed files: %w", err)
@@ -94,4 +100,15 @@ func moveExtractedFiles(fromDir string, toDir string) error {
 	}
 
 	return nil
+}
+
+func reportProgress(ctx InstallContext, phase, step string, percent int, logMessage string) {
+	if ctx.ProgressManager == nil || ctx.ProgressAppID == "" {
+		return
+	}
+
+	ctx.ProgressManager.Update(ctx.ProgressAppID, phase, step, percent)
+	if logMessage != "" {
+		ctx.ProgressManager.Log(ctx.ProgressAppID, logMessage)
+	}
 }
