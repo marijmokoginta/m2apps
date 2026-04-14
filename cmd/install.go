@@ -8,6 +8,7 @@ import (
 	"m2apps/internal/installer"
 	"m2apps/internal/requirements"
 	_ "m2apps/internal/requirements/checkers"
+	"m2apps/internal/storage"
 	"m2apps/internal/ui"
 	"os"
 	"path/filepath"
@@ -115,6 +116,34 @@ var installCmd = &cobra.Command{
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			fmt.Println(ui.Error("[ERROR] Installation aborted."))
 			os.Exit(1)
+		}
+
+		store, err := storage.New()
+		if err != nil {
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
+			os.Exit(1)
+		}
+
+		appConfig := storage.AppConfig{
+			AppID:       cfg.AppID,
+			Name:        cfg.Name,
+			InstallPath: cwd,
+			Repo:        cfg.Source.Repo,
+			Asset:       cfg.Source.Asset,
+			Token:       cfg.Auth.Value,
+			Version:     release.TagName,
+			Preset:      cfg.Preset,
+		}
+
+		if err := store.Save(cfg.AppID, appConfig); err != nil {
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
+			os.Exit(1)
+		}
+
+		if err := os.Remove("install.json"); err != nil && !os.IsNotExist(err) {
+			fmt.Println(ui.Warning(fmt.Sprintf("[WARN] Failed to remove install.json: %v", err)))
 		}
 
 		fmt.Println(ui.Success("[OK] Installation completed."))

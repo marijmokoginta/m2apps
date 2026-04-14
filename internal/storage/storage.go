@@ -1,0 +1,87 @@
+package storage
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+type FileStorage struct {
+	baseDir string
+}
+
+func New() (Storage, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user home directory: %w", err)
+	}
+
+	baseDir := filepath.Join(home, ".m2apps")
+	if err := os.MkdirAll(filepath.Join(baseDir, "apps"), 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create storage directory: %w", err)
+	}
+
+	return &FileStorage{baseDir: baseDir}, nil
+}
+
+func (s *FileStorage) Save(appID string, data AppConfig) error {
+	id := strings.TrimSpace(appID)
+	if id == "" {
+		return fmt.Errorf("app_id is required")
+	}
+
+	appDir := filepath.Join(s.baseDir, "apps", id)
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create app storage directory: %w", err)
+	}
+
+	plain, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to serialize app config: %w", err)
+	}
+
+	encrypted, err := encrypt(plain)
+	if err != nil {
+		return err
+	}
+
+	configPath := filepath.Join(appDir, "config.enc")
+	if err := os.WriteFile(configPath, encrypted, 0o600); err != nil {
+		return fmt.Errorf("failed to write encrypted config: %w", err)
+	}
+
+	// Keep state file present for expected storage structure.
+	statePath := filepath.Join(appDir, "state.json")
+	if err := os.WriteFile(statePath, []byte("{}\n"), 0o600); err != nil {
+		return fmt.Errorf("failed to write state file: %w", err)
+	}
+
+	return nil
+}
+
+func (s *FileStorage) Load(appID string) (AppConfig, error) {
+	id := strings.TrimSpace(appID)
+	if id == "" {
+		return AppConfig{}, fmt.Errorf("app_id is required")
+	}
+
+	configPath := filepath.Join(s.baseDir, "apps", id, "config.enc")
+	cipherData, err := os.ReadFile(configPath)
+	if err != nil {
+		return AppConfig{}, fmt.Errorf("failed to read encrypted config: %w", err)
+	}
+
+	plain, err := decrypt(cipherData)
+	if err != nil {
+		return AppConfig{}, err
+	}
+
+	var cfg AppConfig
+	if err := json.Unmarshal(plain, &cfg); err != nil {
+		return AppConfig{}, fmt.Errorf("failed to deserialize app config: %w", err)
+	}
+
+	return cfg, nil
+}
