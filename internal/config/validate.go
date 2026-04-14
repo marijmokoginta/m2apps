@@ -44,6 +44,11 @@ func (c *InstallConfig) Validate() error {
 		errors = append(errors, "preset is required")
 	}
 
+	channel := strings.ToLower(strings.TrimSpace(c.Channel))
+	if channel != "" && channel != "stable" && channel != "beta" && channel != "alpha" {
+		errors = append(errors, "channel must be one of: stable, beta, alpha")
+	}
+
 	if len(c.Requirements) == 0 {
 		errors = append(errors, "requirements is required")
 	}

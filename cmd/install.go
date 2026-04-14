@@ -36,9 +36,15 @@ var installCmd = &cobra.Command{
 			return
 		}
 
+		channel := strings.ToLower(strings.TrimSpace(cfg.Channel))
+		if channel == "" {
+			channel = "stable"
+		}
+
 		fmt.Println(ui.Success("[OK] Config loaded"))
 		fmt.Printf("%s %s\n", ui.Info("[INFO] App:"), cfg.Name)
 		fmt.Printf("%s %s\n", ui.Info("[INFO] Preset:"), cfg.Preset)
+		fmt.Printf("%s %s\n", ui.Info("[INFO] Channel:"), channel)
 
 		reqs := make([]requirements.Requirement, 0, len(cfg.Requirements))
 		for _, req := range cfg.Requirements {
@@ -133,6 +139,7 @@ var installCmd = &cobra.Command{
 			Asset:       cfg.Source.Asset,
 			Token:       cfg.Auth.Value,
 			Version:     release.TagName,
+			Channel:     channel,
 			Preset:      cfg.Preset,
 		}
 

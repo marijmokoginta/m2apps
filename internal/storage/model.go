@@ -8,6 +8,7 @@ type AppConfig struct {
 	Asset       string `json:"asset"`
 	Token       string `json:"token"`
 	Version     string `json:"version"`
+	Channel     string `json:"channel"`
 	Preset      string `json:"preset"`
 }
 
