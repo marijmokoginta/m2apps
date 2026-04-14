@@ -147,6 +147,7 @@ func Execute() {
 func init() {
 	rootCmd.AddCommand(installCmd)
 	rootCmd.AddCommand(updateCmd)
+	rootCmd.AddCommand(deleteCmd)
 	rootCmd.AddCommand(listCmd)
 }
 
@@ -156,6 +157,7 @@ func runInteractiveRoot(cmd *cobra.Command) error {
 		[]ui.MenuItem{
 			{Title: "Install Application", Action: "install"},
 			{Title: "Update Application", Action: "update"},
+			{Title: "Delete Application", Action: "delete"},
 			{Title: "Switch Channel", Action: "channel"},
 		},
 		[]string{"list", "daemon", "help"},
@@ -170,6 +172,8 @@ func runInteractiveRoot(cmd *cobra.Command) error {
 		return nil
 	case "update":
 		return runInteractiveUpdateFlow()
+	case "delete":
+		return runInteractiveDeleteFlow()
 	case "channel":
 		return runInteractiveChannelFlow()
 	default:
@@ -247,6 +251,32 @@ func runInteractiveChannelFlow() error {
 		return err
 	}
 	fmt.Println(ui.Success(message))
+	return nil
+}
+
+func runInteractiveDeleteFlow() error {
+	apps, err := loadInstalledApps()
+	if err != nil {
+		return err
+	}
+	if len(apps) == 0 {
+		fmt.Println(ui.Warning("[WARN] No installed applications found."))
+		return nil
+	}
+
+	appID, err := ui.RunMenu("Select Application to Delete", toAppMenuItems(apps), nil)
+	if err != nil {
+		if errors.Is(err, ui.ErrMenuCancelled) {
+			return nil
+		}
+		return err
+	}
+
+	if err := runDelete(appID); err != nil {
+		return fmt.Errorf("failed to delete app: %w", err)
+	}
+
+	fmt.Println(ui.Success(fmt.Sprintf("[OK] Application %s deleted", appID)))
 	return nil
 }
 

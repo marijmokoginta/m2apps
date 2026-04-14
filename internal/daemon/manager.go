@@ -208,6 +208,43 @@ func (m *Manager) RegisterApp(appID string) error {
 	return nil
 }
 
+func (m *Manager) UnregisterApp(appID string) error {
+	id := strings.TrimSpace(appID)
+	if id == "" {
+		return fmt.Errorf("app_id is required")
+	}
+
+	if err := m.Install(); err != nil {
+		return err
+	}
+
+	apps := []string{}
+	if data, err := os.ReadFile(m.appsFile); err == nil {
+		_ = json.Unmarshal(data, &apps)
+	} else if os.IsNotExist(err) {
+		return nil
+	} else {
+		return fmt.Errorf("failed to read daemon app registry: %w", err)
+	}
+
+	filtered := make([]string, 0, len(apps))
+	for _, existing := range apps {
+		if existing != id {
+			filtered = append(filtered, existing)
+		}
+	}
+
+	raw, err := json.MarshalIndent(filtered, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to serialize app registry: %w", err)
+	}
+	if err := os.WriteFile(m.appsFile, raw, 0o600); err != nil {
+		return fmt.Errorf("failed to write daemon app registry: %w", err)
+	}
+
+	return nil
+}
+
 func GenerateAPIToken() (string, error) {
 	buf := make([]byte, 24)
 	if _, err := rand.Read(buf); err != nil {

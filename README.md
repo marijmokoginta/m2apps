@@ -23,11 +23,26 @@ M2Apps is a cross-platform CLI installer, updater, and deployment agent for appl
 m2apps
 ```
 
+## Storage Paths
+
+M2Apps stores runtime data inside the user home directory.
+
+- Linux: `$HOME/.m2apps`
+- macOS: `$HOME/.m2apps`
+- Windows: `%USERPROFILE%\\.m2apps`
+
+Main subdirectories:
+
+- `apps/` - encrypted app metadata per `app_id`
+- `daemon/` - daemon runtime data (pid, port, app registry)
+- `logs/` - installer logs
+
 ## Usage
 
 ```bash
 m2apps install
 m2apps update <app_id>
+m2apps delete <app_id>
 m2apps list
 m2apps daemon install
 m2apps daemon start
