@@ -8,6 +8,7 @@ import (
 	"m2apps/internal/installer"
 	"m2apps/internal/requirements"
 	_ "m2apps/internal/requirements/checkers"
+	"m2apps/internal/ui"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,23 +21,23 @@ var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install application from install.json",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Reading install.json...")
+		fmt.Println(ui.Info("[INFO] Reading install.json..."))
 
 		cfg, err := config.LoadFromFile("install.json")
 		if err != nil {
-			fmt.Println("Error:", err)
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			return
 		}
 
 		if err := cfg.Validate(); err != nil {
-			fmt.Println("Error in install.json:")
+			fmt.Println(ui.Error("[ERROR] Error in install.json:"))
 			fmt.Println(err)
 			return
 		}
 
-		fmt.Println("Config loaded")
-		fmt.Printf("App: %s\n", cfg.Name)
-		fmt.Printf("Preset: %s\n", cfg.Preset)
+		fmt.Println(ui.Success("[OK] Config loaded"))
+		fmt.Printf("%s %s\n", ui.Info("[INFO] App:"), cfg.Name)
+		fmt.Printf("%s %s\n", ui.Info("[INFO] Preset:"), cfg.Preset)
 
 		reqs := make([]requirements.Requirement, 0, len(cfg.Requirements))
 		for _, req := range cfg.Requirements {
@@ -50,15 +51,15 @@ var installCmd = &cobra.Command{
 		hasFailure := printRequirementResults(results)
 		if hasFailure {
 			fmt.Println()
-			fmt.Println("Installation aborted.")
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
 			os.Exit(1)
 		}
 
 		owner, repo, err := github.ParseRepo(cfg.Source.Repo)
 		if err != nil {
 			fmt.Println()
-			fmt.Println("Error:", err)
-			fmt.Println("Installation aborted.")
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
 			os.Exit(1)
 		}
 
@@ -67,39 +68,39 @@ var installCmd = &cobra.Command{
 		fmt.Println()
 		release, err := fetchRelease(ghClient, owner, repo, cfg.Source.Version)
 		if err != nil {
-			fmt.Println("Error:", err)
-			fmt.Println("Installation aborted.")
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
 			os.Exit(1)
 		}
 
-		fmt.Printf("Found version: %s\n", release.TagName)
+		fmt.Printf("%s %s\n", ui.Success("[OK] Found version:"), release.TagName)
 
 		asset, err := github.FindAsset(release, cfg.Source.Asset)
 		if err != nil {
-			fmt.Println("Error:", err)
-			fmt.Println("Installation aborted.")
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
 			os.Exit(1)
 		}
 
 		dest := filepath.Join(".", asset.Name)
 		fmt.Println()
-		fmt.Printf("Downloading %s...\n", asset.Name)
+		fmt.Printf("%s %s...\n", ui.Info("[INFO] Downloading"), asset.Name)
 
 		dl := downloader.New(cfg.Auth.Value)
 		if err := dl.Download(asset.URL, dest, printDownloadProgress); err != nil {
 			fmt.Println()
-			fmt.Println("Error:", err)
-			fmt.Println("Installation aborted.")
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
 			os.Exit(1)
 		}
 
 		fmt.Println()
-		fmt.Println("Download completed.")
+		fmt.Println(ui.Success("[OK] Download completed."))
 
 		cwd, err := os.Getwd()
 		if err != nil {
-			fmt.Println("Error:", err)
-			fmt.Println("Installation aborted.")
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
 			os.Exit(1)
 		}
 
@@ -111,18 +112,18 @@ var installCmd = &cobra.Command{
 		}
 
 		if err := installer.Install(installCtx); err != nil {
-			fmt.Println("Error:", err)
-			fmt.Println("Installation aborted.")
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			fmt.Println(ui.Error("[ERROR] Installation aborted."))
 			os.Exit(1)
 		}
 
-		fmt.Println("Installation completed.")
+		fmt.Println(ui.Success("[OK] Installation completed."))
 	},
 }
 
 func printRequirementResults(results []requirements.Result) bool {
 	fmt.Println()
-	fmt.Println("Checking requirements...")
+	fmt.Println(ui.Info("[INFO] Checking requirements..."))
 	fmt.Println()
 
 	hasFailure := false
@@ -131,7 +132,7 @@ func printRequirementResults(results []requirements.Result) bool {
 		label := formatRequirementLabel(res)
 
 		if res.Success {
-			fmt.Printf("[✓] %s (found %s)\n", label, res.Found)
+			fmt.Println(ui.Success(fmt.Sprintf("[OK] %s (found %s)", label, res.Found)))
 			continue
 		}
 
@@ -139,13 +140,13 @@ func printRequirementResults(results []requirements.Result) bool {
 
 		switch {
 		case res.Found == "not found":
-			fmt.Printf("[✗] %s (not found)\n", label)
+			fmt.Println(ui.Error(fmt.Sprintf("[FAIL] %s (not found)", label)))
 		case strings.TrimSpace(res.Found) != "":
-			fmt.Printf("[✗] %s (found %s)\n", label, res.Found)
+			fmt.Println(ui.Error(fmt.Sprintf("[FAIL] %s (found %s)", label, res.Found)))
 		case strings.TrimSpace(res.Message) != "":
-			fmt.Printf("[✗] %s (%s)\n", label, res.Message)
+			fmt.Println(ui.Error(fmt.Sprintf("[FAIL] %s (%s)", label, res.Message)))
 		default:
-			fmt.Printf("[✗] %s (failed)\n", label)
+			fmt.Println(ui.Error(fmt.Sprintf("[FAIL] %s (failed)", label)))
 		}
 	}
 
@@ -161,11 +162,11 @@ func formatRequirementLabel(res requirements.Result) string {
 
 func fetchRelease(client github.Client, owner, repo, version string) (*github.Release, error) {
 	if strings.EqualFold(strings.TrimSpace(version), "latest") {
-		fmt.Println("Fetching latest release...")
+		fmt.Println(ui.Info("[INFO] Fetching latest release..."))
 		return client.GetLatestRelease(owner, repo)
 	}
 
-	fmt.Printf("Fetching release tag %s...\n", version)
+	fmt.Printf("%s %s...\n", ui.Info("[INFO] Fetching release tag"), version)
 	return client.GetReleaseByTag(owner, repo, version)
 }
 

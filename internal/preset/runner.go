@@ -2,6 +2,8 @@ package preset
 
 import (
 	"fmt"
+	"m2apps/internal/logger"
+	"m2apps/internal/ui"
 	"os"
 	"os/exec"
 	"runtime"
@@ -23,16 +25,34 @@ func RunSteps(steps []Step, workDir string) error {
 			return fmt.Errorf("empty command in step %d", i+1)
 		}
 
-		fmt.Printf("[%d/%d] %s\n", i+1, total, commandLine)
+		logWriter := logger.Writer()
+		if logWriter == nil {
+			return fmt.Errorf("logger is not initialized")
+		}
+
+		if _, err := logWriter.WriteString(fmt.Sprintf("\n=== Step [%d/%d]: %s ===\n", i+1, total, commandLine)); err != nil {
+			return fmt.Errorf("failed to write step log: %w", err)
+		}
 
 		cmd := buildShellCommand(commandLine)
 		cmd.Dir = workDir
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout = logWriter
+		cmd.Stderr = logWriter
+		cmd.Env = append(os.Environ(),
+			"CI=true",
+			"NPM_CONFIG_LOGLEVEL=silent",
+			"NO_COLOR=1",
+		)
+
+		spinner := ui.NewSpinner()
+		spinner.Start(fmt.Sprintf("[%d/%d] Running: %s", i+1, total, commandLine))
 
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("installation failed at step: %s", commandLine)
+			spinner.Stop(ui.Error(fmt.Sprintf("[FAIL] %s", commandLine)))
+			return fmt.Errorf("step failed: %s (see logs)", commandLine)
 		}
+
+		spinner.Stop(ui.Success(fmt.Sprintf("[OK] %s", commandLine)))
 	}
 
 	return nil

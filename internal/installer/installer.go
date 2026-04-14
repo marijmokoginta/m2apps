@@ -2,6 +2,8 @@ package installer
 
 import (
 	"fmt"
+	"m2apps/internal/logger"
+	"m2apps/internal/ui"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +20,11 @@ type InstallContext struct {
 }
 
 func Install(ctx InstallContext) error {
+	if err := logger.Init(); err != nil {
+		return fmt.Errorf("failed to initialize logger: %w", err)
+	}
+	defer logger.Close()
+
 	appID := strings.TrimSpace(ctx.AppID)
 	if appID == "" {
 		return fmt.Errorf("app_id is required")
@@ -38,22 +45,28 @@ func Install(ctx InstallContext) error {
 	}
 	defer os.RemoveAll(tempDir)
 
+	fmt.Println(ui.Info("[INFO] Extracting files..."))
 	if err := extractor.ExtractZip(ctx.ZipPath, tempDir); err != nil {
 		return fmt.Errorf("failed to extract zip: %w", err)
 	}
+	fmt.Println(ui.Success("[OK] Files extracted"))
 
 	steps, err := preset.GetPreset(ctx.Preset)
 	if err != nil {
 		return err
 	}
 
+	fmt.Println(ui.Info("[INFO] Running installation preset..."))
 	if err := preset.RunSteps(steps, tempDir); err != nil {
 		return err
 	}
+	fmt.Println(ui.Success("[OK] Preset execution completed"))
 
+	fmt.Println(ui.Info("[INFO] Moving installed files..."))
 	if err := moveExtractedFiles(tempDir, targetDir); err != nil {
 		return fmt.Errorf("failed to move installed files: %w", err)
 	}
+	fmt.Println(ui.Success("[OK] Files moved to target directory"))
 
 	return nil
 }
