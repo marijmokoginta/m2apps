@@ -1,0 +1,5 @@
+.gocache/
+.gomodcache/
+/tmp/
+*.exe
+*.out
