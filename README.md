@@ -18,18 +18,33 @@ M2Apps is a cross-platform CLI installer, updater, and deployment agent for appl
 
 Linux/macOS:
 
-```bash
-curl -fsSLO https://raw.githubusercontent.com/marijmokoginta/m2apps/main/install.sh
-chmod +x install.sh
-./install.sh
-```
+- download installer
+  ```bash
+  curl -fsSLO https://raw.githubusercontent.com/marijmokoginta/m2apps/main/install.sh
+  ```
+- add permission
+  ```bash
+  chmod +x install.sh
+  ```
+- run
+  ```bash
+  ./install.sh
+  ```
 
-Windows (PowerShell as Administrator):
+Windows (PowerShell):
 
-```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/marijmokoginta/m2apps/main/install.ps1 -OutFile install.ps1
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
+- download installer
+  ```powershell
+  Invoke-WebRequest https://raw.githubusercontent.com/marijmokoginta/m2apps/main/install.ps1 -OutFile install.ps1
+  ```
+- run
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File .\install.ps1
+  ```
+
+Note:
+- the installer can run without Administrator privileges (user-level install)
+- if run as Administrator, it installs machine-wide in `C:\Program Files\M2Code`
 
 Installer flow:
 
