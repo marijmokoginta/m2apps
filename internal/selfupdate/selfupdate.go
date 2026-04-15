@@ -10,6 +10,7 @@ import (
 	"io"
 	"m2apps/internal/downloader"
 	"m2apps/internal/github"
+	"m2apps/internal/privilege"
 	"m2apps/internal/system"
 	"m2apps/internal/ui"
 	"os"
@@ -152,6 +153,16 @@ func Update(currentVersion string) error {
 	}
 
 	if err := replaceBinary(execPath, newBinaryPath); err != nil {
+		if isPermissionDeniedError(err) {
+			stopInstallSpinner(ui.Info("[INFO] Requesting supervisor permission to apply self-update..."))
+			if elevateErr := replaceBinaryElevated(execPath, newBinaryPath); elevateErr != nil {
+				stopInstallSpinner(ui.Error(fmt.Sprintf("[FAIL] Install update failed: %v", elevateErr)))
+				return elevateErr
+			}
+			stopInstallSpinner(ui.Success("[OK] Install update completed"))
+			_ = SaveSkippedVersion("")
+			return nil
+		}
 		stopInstallSpinner(ui.Error(fmt.Sprintf("[FAIL] Install update failed: %v", err)))
 		return err
 	}
@@ -160,7 +171,7 @@ func Update(currentVersion string) error {
 	return nil
 }
 
-func RunInternalSelfUpdate(targetPath, newBinaryPath string, parentPID int) error {
+func RunInternalSelfUpdate(targetPath, newBinaryPath string, parentPID int, restart bool) error {
 	target := filepath.Clean(strings.TrimSpace(targetPath))
 	newBin := filepath.Clean(strings.TrimSpace(newBinaryPath))
 	if target == "" {
@@ -180,6 +191,10 @@ func RunInternalSelfUpdate(targetPath, newBinaryPath string, parentPID int) erro
 
 	if err := replaceBinary(target, newBin); err != nil {
 		return err
+	}
+
+	if !restart {
+		return nil
 	}
 
 	return restartBinary(target)
@@ -385,6 +400,7 @@ func launchWindowsUpdater(targetPath, newBinaryPath string) error {
 		"--target", targetPath,
 		"--new", newBinaryPath,
 		"--parent-pid", strconv.Itoa(os.Getpid()),
+		"--restart", "true",
 	)
 	configureUpdaterProcess(cmd)
 	cmd.Stdin = nil
@@ -532,6 +548,39 @@ func isPIDRunning(pid int) bool {
 		return false
 	}
 	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+func replaceBinaryElevated(targetPath, newBinaryPath string) error {
+	if privilege.IsElevated() {
+		return fmt.Errorf("self-update needs write access but elevation still unavailable")
+	}
+
+	args := []string{
+		"internal", "self-update",
+		"--target", targetPath,
+		"--new", newBinaryPath,
+		"--parent-pid", "0",
+		"--restart", "false",
+	}
+
+	if err := privilege.RelaunchElevated(args); err != nil {
+		return fmt.Errorf("failed to apply self-update with supervisor permission: %w", err)
+	}
+	return nil
+}
+
+func isPermissionDeniedError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, os.ErrPermission) {
+		return true
+	}
+
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "permission denied") ||
+		strings.Contains(text, "operation not permitted")
 }
 
 func printSelfUpdateDownloadProgress(read, total int64) {
