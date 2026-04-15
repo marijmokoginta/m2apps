@@ -17,7 +17,7 @@ import (
 )
 
 const colorReset = "\033[0m"
-const appVersion = "v1.1.4"
+const appVersion = "v1.1.5"
 
 func rgb(r, g, b int) string {
 	return fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
@@ -475,6 +475,46 @@ func runInteractiveDaemonFlow() error {
 					{Title: "Start Service", Action: "start"},
 					{Title: "Stop Service", Action: "stop"},
 					{Title: "Status Service", Action: "status"},
+					{Title: "Local API Diagnostics", Action: "api_menu"},
+				},
+				"Back",
+			),
+			nil,
+		)
+		if err != nil {
+			if errors.Is(err, ui.ErrMenuCancelled) {
+				return nil
+			}
+			return err
+		}
+		if action == menuActionBack {
+			return nil
+		}
+
+		if action == "api_menu" {
+			if err := runInteractiveLocalAPIFlow(); err != nil {
+				return err
+			}
+			return nil
+		}
+
+		if err := runDaemonCommand(action); err != nil {
+			return err
+		}
+
+		promptBackToMainMenu()
+		return nil
+	}
+}
+
+func runInteractiveLocalAPIFlow() error {
+	for {
+		action, err := runInteractiveMenu(
+			"Local API Diagnostics",
+			withBackMenuItems(
+				[]ui.MenuItem{
+					{Title: "Show Local API Detail", Action: "api_info"},
+					{Title: "Ping Local API", Action: "api_ping"},
 				},
 				"Back",
 			),

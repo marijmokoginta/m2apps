@@ -3,14 +3,21 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"m2apps/internal/daemon"
 	"m2apps/internal/privilege"
 	"m2apps/internal/service"
+	"m2apps/internal/system"
 	"m2apps/internal/ui"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -164,6 +171,7 @@ func runDaemonStatus() error {
 	}
 
 	fmt.Println(ui.Info(fmt.Sprintf("[INFO] Service status: %s", status)))
+	printLocalAPISummary()
 	return nil
 }
 
@@ -206,6 +214,10 @@ func runDaemonCommand(action string) error {
 		})
 	case "status":
 		return runDaemonStatus()
+	case "api_info":
+		return runLocalAPIInfo()
+	case "api_ping":
+		return runLocalAPIPing()
 	default:
 		return fmt.Errorf("unsupported daemon action %q", action)
 	}
@@ -231,4 +243,129 @@ func triggerDaemonSupervisorPopup(action string) (bool, error) {
 	}
 
 	return true, nil
+}
+
+type localAPIState struct {
+	Port       int
+	PID        int
+	URL        string
+	TCPReady   bool
+	HTTPReady  bool
+	HTTPStatus int
+	Error      string
+}
+
+func collectLocalAPIState() localAPIState {
+	state := localAPIState{}
+	state.PID = readDaemonPID()
+
+	manager, err := daemon.NewManager()
+	if err != nil {
+		state.Error = err.Error()
+		return state
+	}
+
+	port, err := manager.Port()
+	if err != nil {
+		state.Error = err.Error()
+		return state
+	}
+	state.Port = port
+	state.URL = fmt.Sprintf("http://127.0.0.1:%d", port)
+
+	tcpConn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 2*time.Second)
+	if err == nil {
+		state.TCPReady = true
+		_ = tcpConn.Close()
+	}
+
+	httpClient := &http.Client{Timeout: 3 * time.Second}
+	resp, err := httpClient.Get(state.URL + "/health")
+	if err != nil {
+		if state.Error == "" {
+			state.Error = err.Error()
+		}
+		return state
+	}
+	defer resp.Body.Close()
+
+	state.HTTPStatus = resp.StatusCode
+	if resp.StatusCode > 0 {
+		state.HTTPReady = true
+	}
+	return state
+}
+
+func printLocalAPISummary() {
+	spinner := ui.NewSpinner()
+	spinner.Start("[INFO] Checking Local API...")
+	state := collectLocalAPIState()
+	spinner.Stop(ui.Success("[OK] Local API check completed"))
+
+	fmt.Println(ui.Info("[INFO] Local API Summary:"))
+	if state.Port <= 0 {
+		fmt.Printf("%s %s\n", ui.Warning("[WARN] Port:"), "not available")
+		if strings.TrimSpace(state.Error) != "" {
+			fmt.Printf("%s %s\n", ui.Warning("[WARN] Detail:"), state.Error)
+		}
+		return
+	}
+
+	fmt.Printf("%s %d\n", ui.Info("[INFO] PID:"), state.PID)
+	fmt.Printf("%s %d\n", ui.Info("[INFO] Port:"), state.Port)
+	fmt.Printf("%s %s\n", ui.Info("[INFO] URL:"), state.URL)
+	fmt.Printf("%s %t\n", ui.Info("[INFO] TCP Health:"), state.TCPReady)
+	fmt.Printf("%s %t\n", ui.Info("[INFO] HTTP Health:"), state.HTTPReady)
+	if state.HTTPStatus > 0 {
+		fmt.Printf("%s %d\n", ui.Info("[INFO] Last HTTP Status:"), state.HTTPStatus)
+	}
+	if strings.TrimSpace(state.Error) != "" {
+		fmt.Printf("%s %s\n", ui.Warning("[WARN] Detail:"), state.Error)
+	}
+}
+
+func runLocalAPIInfo() error {
+	printLocalAPISummary()
+	return nil
+}
+
+func runLocalAPIPing() error {
+	spinner := ui.NewSpinner()
+	spinner.Start("[INFO] Pinging Local API endpoint...")
+	state := collectLocalAPIState()
+	if state.Port <= 0 || strings.TrimSpace(state.URL) == "" {
+		spinner.Stop(ui.Error("[FAIL] Local API ping failed"))
+		return fmt.Errorf("local API port is not available: %s", state.Error)
+	}
+
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Get(state.URL + "/ping")
+	if err != nil {
+		spinner.Stop(ui.Error("[FAIL] Local API ping failed"))
+		return fmt.Errorf("failed to ping local API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	spinner.Stop(ui.Success("[OK] Local API ping completed"))
+	fmt.Printf("%s %s\n", ui.Info("[INFO] URL:"), state.URL+"/ping")
+	fmt.Printf("%s %d\n", ui.Info("[INFO] HTTP Status:"), resp.StatusCode)
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		trimmed = "(empty)"
+	}
+	fmt.Printf("%s %s\n", ui.Info("[INFO] Response:"), trimmed)
+	return nil
+}
+
+func readDaemonPID() int {
+	data, err := os.ReadFile(filepath.Join(system.GetDaemonDir(), "daemon.pid"))
+	if err != nil {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0
+	}
+	return pid
 }

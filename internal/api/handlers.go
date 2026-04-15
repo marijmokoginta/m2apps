@@ -16,6 +16,15 @@ type Handler struct {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet && strings.TrimSpace(r.URL.Path) == "/health" {
+		h.handleHealth(w)
+		return
+	}
+	if r.Method == http.MethodGet && strings.TrimSpace(r.URL.Path) == "/ping" {
+		h.handlePing(w)
+		return
+	}
+
 	parts := splitPath(r.URL.Path)
 	if len(parts) < 3 || parts[0] != "apps" {
 		writeErrorJSON(w, http.StatusNotFound, "endpoint not found")
@@ -136,6 +145,19 @@ func (h *Handler) handleUpdateToken(w http.ResponseWriter, appID string, cfg sto
 	writeJSON(w, http.StatusOK, map[string]any{
 		"updated": true,
 		"app_id":  appID,
+	})
+}
+
+func (h *Handler) handleHealth(w http.ResponseWriter) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"service": "m2apps-local-api",
+	})
+}
+
+func (h *Handler) handlePing(w http.ResponseWriter) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"pong": true,
 	})
 }
 

@@ -7,6 +7,10 @@ import (
 )
 
 func GetBaseDir() string {
+	if override := strings.TrimSpace(os.Getenv("M2APPS_HOME")); override != "" {
+		return override
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil || strings.TrimSpace(home) == "" {
 		return ".m2apps"

@@ -12,6 +12,52 @@ func Inject(installPath string, vars map[string]string) error {
 	return injectWithPlaceholders(installPath, vars, nil)
 }
 
+func Upsert(installPath string, vars map[string]string) error {
+	targetFile, err := resolveTargetEnvFile(installPath)
+	if err != nil {
+		return err
+	}
+
+	content, err := os.ReadFile(targetFile)
+	if err != nil {
+		return fmt.Errorf("failed to read env file %s: %w", targetFile, err)
+	}
+
+	lines := strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n")
+	replaced := make(map[string]struct{}, len(vars))
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		parts := strings.SplitN(trimmed, "=", 2)
+		key := strings.TrimSpace(parts[0])
+		value, ok := vars[key]
+		if !ok {
+			continue
+		}
+
+		lines[i] = fmt.Sprintf("%s=%s", key, value)
+		replaced[key] = struct{}{}
+	}
+
+	for key, value := range vars {
+		if _, ok := replaced[key]; ok {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	updated := strings.Join(lines, "\n")
+	updated = strings.TrimRight(updated, "\n") + "\n"
+	if err := os.WriteFile(targetFile, []byte(updated), 0o644); err != nil {
+		return fmt.Errorf("failed to write env file %s: %w", targetFile, err)
+	}
+
+	return nil
+}
+
 func InjectAppURL(installPath string, port int) error {
 	if port <= 0 {
 		return nil

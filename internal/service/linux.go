@@ -5,28 +5,16 @@ import (
 	"fmt"
 	"m2apps/internal/system"
 	"os"
+	"os/user"
+	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 const (
 	linuxServiceName = "m2apps"
 	linuxServiceFile = "/etc/systemd/system/m2apps.service"
-	unixBinaryPath   = "/usr/local/bin/m2apps"
 )
-
-var linuxServiceUnit = strings.Join([]string{
-	"[Unit]",
-	"Description=M2Apps Daemon",
-	"After=network.target",
-	"",
-	"[Service]",
-	"ExecStart=/usr/local/bin/m2apps daemon run",
-	"Restart=always",
-	"",
-	"[Install]",
-	"WantedBy=multi-user.target",
-	"",
-}, "\n")
 
 type LinuxService struct{}
 
@@ -38,7 +26,11 @@ func (s *LinuxService) Install() error {
 	if err := requireRoot(); err != nil {
 		return err
 	}
-	if err := validateBinary(unixBinaryPath); err != nil {
+	execPath, err := resolveExecutablePath()
+	if err != nil {
+		return err
+	}
+	if err := validateBinary(execPath); err != nil {
 		return err
 	}
 	if exists, err := fileExists(linuxServiceFile); err != nil {
@@ -47,7 +39,13 @@ func (s *LinuxService) Install() error {
 		return fmt.Errorf("service already exists at %s", linuxServiceFile)
 	}
 
-	if err := os.WriteFile(linuxServiceFile, []byte(linuxServiceUnit), 0644); err != nil {
+	baseDir := filepath.Clean(system.GetBaseDir())
+	runUser, runGroup := resolveServiceRuntimeAccount()
+	if err := ensureServiceRuntimeOwnership(baseDir, runUser, runGroup); err != nil {
+		return err
+	}
+	unit := linuxServiceUnit(execPath, baseDir, runUser, runGroup)
+	if err := os.WriteFile(linuxServiceFile, []byte(unit), 0644); err != nil {
 		return fmt.Errorf("failed to write service file: %w", err)
 	}
 	if err := runCommand("systemctl", "daemon-reload"); err != nil {
@@ -103,6 +101,11 @@ func (s *LinuxService) Start() error {
 		return err
 	}
 	if err := ensureLinuxServiceInstalled(); err != nil {
+		return err
+	}
+	baseDir := filepath.Clean(system.GetBaseDir())
+	runUser, runGroup := resolveServiceRuntimeAccount()
+	if err := ensureServiceRuntimeOwnership(baseDir, runUser, runGroup); err != nil {
 		return err
 	}
 	return runCommand("systemctl", "start", linuxServiceName)
@@ -194,4 +197,102 @@ func validateBinary(path string) error {
 		return fmt.Errorf("binary not found at %s", path)
 	}
 	return nil
+}
+
+func resolveServiceRuntimeAccount() (string, string) {
+	if name := strings.TrimSpace(os.Getenv("SUDO_USER")); name != "" && !strings.EqualFold(name, "root") {
+		return name, name
+	}
+
+	if rawUID := strings.TrimSpace(os.Getenv("PKEXEC_UID")); rawUID != "" {
+		if _, err := strconv.Atoi(rawUID); err == nil {
+			if u, err := user.LookupId(rawUID); err == nil {
+				groupName := strings.TrimSpace(u.Username)
+				if grp, err := user.LookupGroupId(u.Gid); err == nil && strings.TrimSpace(grp.Name) != "" {
+					groupName = strings.TrimSpace(grp.Name)
+				}
+				return strings.TrimSpace(u.Username), groupName
+			}
+		}
+	}
+
+	if name := strings.TrimSpace(os.Getenv("USER")); name != "" && !strings.EqualFold(name, "root") {
+		return name, name
+	}
+
+	return "", ""
+}
+
+func ensureServiceRuntimeOwnership(baseDir, runUser, runGroup string) error {
+	if strings.TrimSpace(runUser) == "" {
+		return nil
+	}
+
+	u, err := user.Lookup(runUser)
+	if err != nil {
+		return fmt.Errorf("failed to resolve service user %s: %w", runUser, err)
+	}
+
+	uid, err := strconv.Atoi(strings.TrimSpace(u.Uid))
+	if err != nil {
+		return fmt.Errorf("failed to parse uid for %s: %w", runUser, err)
+	}
+
+	targetGroup := strings.TrimSpace(runGroup)
+	if targetGroup == "" {
+		targetGroup = strings.TrimSpace(u.Username)
+	}
+	grp, err := user.LookupGroup(targetGroup)
+	if err != nil {
+		return fmt.Errorf("failed to resolve service group %s: %w", targetGroup, err)
+	}
+
+	gid, err := strconv.Atoi(strings.TrimSpace(grp.Gid))
+	if err != nil {
+		return fmt.Errorf("failed to parse gid for %s: %w", targetGroup, err)
+	}
+
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create base directory %s: %w", baseDir, err)
+	}
+
+	if err := filepath.WalkDir(baseDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := os.Chown(path, uid, gid); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to update ownership under %s: %w", baseDir, err)
+	}
+
+	return nil
+}
+
+func linuxServiceUnit(binaryPath, baseDir, runUser, runGroup string) string {
+	lines := []string{
+		"[Unit]",
+		"Description=M2Apps Daemon",
+		"After=network.target",
+		"",
+		"[Service]",
+		fmt.Sprintf("Environment=M2APPS_HOME=%s", baseDir),
+		fmt.Sprintf("ExecStart=%s daemon run", binaryPath),
+		"Restart=always",
+	}
+	if strings.TrimSpace(runUser) != "" {
+		lines = append(lines, fmt.Sprintf("User=%s", runUser))
+	}
+	if strings.TrimSpace(runGroup) != "" {
+		lines = append(lines, fmt.Sprintf("Group=%s", runGroup))
+	}
+	lines = append(lines,
+		"",
+		"[Install]",
+		"WantedBy=multi-user.target",
+		"",
+	)
+	return strings.Join(lines, "\n")
 }

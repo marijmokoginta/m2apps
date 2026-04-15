@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"m2apps/internal/system"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +19,11 @@ func NewMacOSService() ServiceManager {
 }
 
 func (s *MacOSService) Install() error {
-	if err := validateBinary(unixBinaryPath); err != nil {
+	execPath, err := resolveExecutablePath()
+	if err != nil {
+		return err
+	}
+	if err := validateBinary(execPath); err != nil {
 		return err
 	}
 
@@ -35,7 +40,7 @@ func (s *MacOSService) Install() error {
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0755); err != nil {
 		return fmt.Errorf("failed to create launch agent directory: %w", err)
 	}
-	if err := os.WriteFile(plistPath, []byte(macOSPlistContent(unixBinaryPath)), 0644); err != nil {
+	if err := os.WriteFile(plistPath, []byte(macOSPlistContent(execPath, system.GetBaseDir())), 0644); err != nil {
 		return fmt.Errorf("failed to write launch agent plist: %w", err)
 	}
 
@@ -133,7 +138,7 @@ func macOSPlistPath() (string, error) {
 	return filepath.Join(home, "Library", "LaunchAgents", "com.m2apps.daemon.plist"), nil
 }
 
-func macOSPlistContent(binaryPath string) string {
+func macOSPlistContent(binaryPath, baseDir string) string {
 	return strings.Join([]string{
 		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
 		"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">",
@@ -148,6 +153,12 @@ func macOSPlistContent(binaryPath string) string {
 		"        <string>daemon</string>",
 		"        <string>run</string>",
 		"    </array>",
+		"",
+		"    <key>EnvironmentVariables</key>",
+		"    <dict>",
+		"        <key>M2APPS_HOME</key>",
+		fmt.Sprintf("        <string>%s</string>", baseDir),
+		"    </dict>",
 		"",
 		"    <key>RunAtLoad</key>",
 		"    <true/>",

@@ -8,7 +8,6 @@ import (
 
 const (
 	windowsServiceName = "M2Apps"
-	windowsBinaryPath  = `C:\Program Files\M2Code\m2apps.exe`
 )
 
 type WindowsService struct{}
@@ -21,7 +20,11 @@ func (s *WindowsService) Install() error {
 	if err := requireAdmin(); err != nil {
 		return err
 	}
-	if err := validateBinary(windowsBinaryPath); err != nil {
+	execPath, err := resolveExecutablePath()
+	if err != nil {
+		return err
+	}
+	if err := validateBinary(execPath); err != nil {
 		return err
 	}
 
@@ -33,7 +36,7 @@ func (s *WindowsService) Install() error {
 		return err
 	}
 
-	binPathValue := fmt.Sprintf("\"%s daemon run\"", windowsBinaryPath)
+	binPathValue := fmt.Sprintf("\"%s\" daemon run", execPath)
 	return runSC("create", windowsServiceName, "binPath=", binPathValue, "start=", "auto")
 }
 

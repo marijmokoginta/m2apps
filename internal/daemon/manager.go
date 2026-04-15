@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"m2apps/internal/api"
+	"m2apps/internal/env"
 	procman "m2apps/internal/process"
 	"m2apps/internal/progress"
 	"m2apps/internal/storage"
@@ -49,8 +50,14 @@ func (m *Manager) Install() error {
 	if err := os.MkdirAll(m.baseDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create daemon directory: %w", err)
 	}
+	if err := os.Chmod(m.baseDir, 0o755); err != nil && !os.IsPermission(err) {
+		return fmt.Errorf("failed to set daemon directory permission: %w", err)
+	}
 	if err := os.MkdirAll(system.GetLogDir(), 0o755); err != nil {
 		return fmt.Errorf("failed to create daemon log directory: %w", err)
+	}
+	if err := os.Chmod(system.GetLogDir(), 0o755); err != nil && !os.IsPermission(err) {
+		return fmt.Errorf("failed to set daemon log directory permission: %w", err)
 	}
 	return nil
 }
@@ -62,7 +69,12 @@ func (m *Manager) Start() error {
 
 	running, _ := m.isRunning()
 	if running {
-		return nil
+		if m.isAPIReachable() {
+			return nil
+		}
+
+		m.logErrorf("stale daemon runtime detected (pid exists but API is not reachable), restarting daemon process")
+		_ = os.Remove(m.pidFile)
 	}
 
 	execPath, err := os.Executable()
@@ -161,6 +173,7 @@ func (m *Manager) RunForeground(ctx context.Context) error {
 	defer m.cleanupRuntimeFiles()
 
 	m.logInfof("daemon started pid=%d port=%d", os.Getpid(), port)
+	m.syncAppAPIEnv(store, port)
 	m.autoStartApps(store)
 
 	server := api.NewServer(store, progress.DefaultManager())
@@ -225,8 +238,11 @@ func (m *Manager) RegisterApp(appID string) error {
 	if err != nil {
 		return fmt.Errorf("failed to serialize app registry: %w", err)
 	}
-	if err := os.WriteFile(m.appsFile, raw, 0o600); err != nil {
+	if err := os.WriteFile(m.appsFile, raw, 0o644); err != nil {
 		return fmt.Errorf("failed to write daemon app registry: %w", err)
+	}
+	if err := os.Chmod(m.appsFile, 0o644); err != nil && !os.IsPermission(err) {
+		return fmt.Errorf("failed to set daemon app registry permission: %w", err)
 	}
 
 	return nil
@@ -262,8 +278,11 @@ func (m *Manager) UnregisterApp(appID string) error {
 	if err != nil {
 		return fmt.Errorf("failed to serialize app registry: %w", err)
 	}
-	if err := os.WriteFile(m.appsFile, raw, 0o600); err != nil {
+	if err := os.WriteFile(m.appsFile, raw, 0o644); err != nil {
 		return fmt.Errorf("failed to write daemon app registry: %w", err)
+	}
+	if err := os.Chmod(m.appsFile, 0o644); err != nil && !os.IsPermission(err) {
+		return fmt.Errorf("failed to set daemon app registry permission: %w", err)
 	}
 
 	return nil
@@ -278,11 +297,17 @@ func GenerateAPIToken() (string, error) {
 }
 
 func (m *Manager) writeRuntimeFiles(pid, port int) error {
-	if err := os.WriteFile(m.pidFile, []byte(strconv.Itoa(pid)), 0o600); err != nil {
+	if err := os.WriteFile(m.pidFile, []byte(strconv.Itoa(pid)), 0o644); err != nil {
 		return fmt.Errorf("failed to write daemon pid file: %w", err)
 	}
-	if err := os.WriteFile(m.portFile, []byte(strconv.Itoa(port)), 0o600); err != nil {
+	if err := os.Chmod(m.pidFile, 0o644); err != nil && !os.IsPermission(err) {
+		return fmt.Errorf("failed to set daemon pid file permission: %w", err)
+	}
+	if err := os.WriteFile(m.portFile, []byte(strconv.Itoa(port)), 0o644); err != nil {
 		return fmt.Errorf("failed to write daemon port file: %w", err)
+	}
+	if err := os.Chmod(m.portFile, 0o644); err != nil && !os.IsPermission(err) {
+		return fmt.Errorf("failed to set daemon port file permission: %w", err)
 	}
 	return nil
 }
@@ -500,4 +525,55 @@ func hasRunningProcess(processes []procman.Process) bool {
 		}
 	}
 	return false
+}
+
+func (m *Manager) isAPIReachable() bool {
+	port, err := m.Port()
+	if err != nil || port <= 0 {
+		return false
+	}
+
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 2*time.Second)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+func (m *Manager) syncAppAPIEnv(store storage.Storage, port int) {
+	if port <= 0 {
+		return
+	}
+
+	configs, err := m.loadInstalledApps(store)
+	if err != nil {
+		m.logErrorf("failed to load apps for API env sync: %v", err)
+		return
+	}
+
+	apiURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	for _, cfg := range configs {
+		installPath := strings.TrimSpace(cfg.InstallPath)
+		if installPath == "" {
+			continue
+		}
+
+		vars := map[string]string{
+			"M2APPS_API_URL": apiURL,
+		}
+		if strings.TrimSpace(cfg.APIToken) != "" {
+			vars["M2APPS_API_TOKEN"] = strings.TrimSpace(cfg.APIToken)
+		}
+		if strings.TrimSpace(cfg.AppID) != "" {
+			vars["M2APPS_APP_ID"] = strings.TrimSpace(cfg.AppID)
+		}
+
+		if err := env.Upsert(installPath, vars); err != nil {
+			m.logErrorf("failed to sync API env for app %s: %v", cfg.AppID, err)
+			continue
+		}
+
+		m.logInfof("synced API env for app %s with %s", cfg.AppID, apiURL)
+	}
 }

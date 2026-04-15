@@ -11,6 +11,7 @@ import (
 	"m2apps/internal/downloader"
 	"m2apps/internal/github"
 	"m2apps/internal/privilege"
+	"m2apps/internal/service"
 	"m2apps/internal/system"
 	"m2apps/internal/ui"
 	"os"
@@ -120,6 +121,21 @@ func Update(currentVersion string) error {
 	fmt.Println(ui.Success("[OK] Update package downloaded"))
 
 	newBinaryPath := filepath.Join(os.TempDir(), "m2apps_new"+executableSuffix())
+
+	daemonWasRunning, err := stopDaemonForSelfUpdate()
+	if err != nil {
+		return fmt.Errorf("failed to stop daemon before self-update: %w", err)
+	}
+	restoreDaemon := true
+	defer func() {
+		if !restoreDaemon || !daemonWasRunning {
+			return
+		}
+		if startErr := startDaemonAfterSelfUpdate(); startErr != nil {
+			fmt.Println(ui.Warning(fmt.Sprintf("[WARN] Updated successfully, but failed to restart daemon service: %v", startErr)))
+		}
+	}()
+
 	installSpinner := ui.NewSpinner()
 	installSpinner.Start("[INFO] Installing self-update...")
 	stopInstallSpinner := func(message string) {
@@ -143,10 +159,11 @@ func Update(currentVersion string) error {
 	}
 
 	if runtime.GOOS == "windows" {
-		if err := launchWindowsUpdater(execPath, newBinaryPath); err != nil {
+		if err := launchWindowsUpdater(execPath, newBinaryPath, daemonWasRunning); err != nil {
 			stopInstallSpinner(ui.Error(fmt.Sprintf("[FAIL] Install update failed: %v", err)))
 			return err
 		}
+		restoreDaemon = false
 		stopInstallSpinner(ui.Success("[OK] Install update completed"))
 		_ = SaveSkippedVersion("")
 		return ErrRestartScheduled
@@ -171,7 +188,7 @@ func Update(currentVersion string) error {
 	return nil
 }
 
-func RunInternalSelfUpdate(targetPath, newBinaryPath string, parentPID int, restart bool) error {
+func RunInternalSelfUpdate(targetPath, newBinaryPath string, parentPID int, restart bool, restartDaemon bool) error {
 	target := filepath.Clean(strings.TrimSpace(targetPath))
 	newBin := filepath.Clean(strings.TrimSpace(newBinaryPath))
 	if target == "" {
@@ -191,6 +208,12 @@ func RunInternalSelfUpdate(targetPath, newBinaryPath string, parentPID int, rest
 
 	if err := replaceBinary(target, newBin); err != nil {
 		return err
+	}
+
+	if restartDaemon {
+		if err := startDaemonAfterSelfUpdate(); err != nil {
+			return fmt.Errorf("updated binary but failed to restart daemon: %w", err)
+		}
 	}
 
 	if !restart {
@@ -387,7 +410,7 @@ func writeBinaryFile(path string, src io.Reader, mode os.FileMode) error {
 	return nil
 }
 
-func launchWindowsUpdater(targetPath, newBinaryPath string) error {
+func launchWindowsUpdater(targetPath, newBinaryPath string, restartDaemon bool) error {
 	helperPath := filepath.Join(os.TempDir(), fmt.Sprintf("m2apps_updater_%d.exe", time.Now().UnixNano()))
 	if err := copyFile(targetPath, helperPath, 0o755); err != nil {
 		return fmt.Errorf("failed to prepare windows updater helper: %w", err)
@@ -401,6 +424,7 @@ func launchWindowsUpdater(targetPath, newBinaryPath string) error {
 		"--new", newBinaryPath,
 		"--parent-pid", strconv.Itoa(os.Getpid()),
 		"--restart", "true",
+		"--restart-daemon", strconv.FormatBool(restartDaemon),
 	)
 	configureUpdaterProcess(cmd)
 	cmd.Stdin = nil
@@ -581,6 +605,75 @@ func isPermissionDeniedError(err error) bool {
 	text := strings.ToLower(err.Error())
 	return strings.Contains(text, "permission denied") ||
 		strings.Contains(text, "operation not permitted")
+}
+
+func stopDaemonForSelfUpdate() (bool, error) {
+	running, err := isDaemonServiceRunning()
+	if err != nil {
+		return false, err
+	}
+	if !running {
+		return false, nil
+	}
+
+	if err := runDaemonServiceAction("stop", func(m service.ServiceManager) error {
+		return m.Stop()
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func startDaemonAfterSelfUpdate() error {
+	return runDaemonServiceAction("start", func(m service.ServiceManager) error {
+		return m.Start()
+	})
+}
+
+func isDaemonServiceRunning() (bool, error) {
+	manager := service.NewServiceManager()
+	status, err := manager.Status()
+	if err != nil {
+		lower := strings.ToLower(strings.TrimSpace(err.Error()))
+		if strings.Contains(lower, "service not found") {
+			return false, nil
+		}
+		return false, err
+	}
+
+	state := strings.ToLower(strings.TrimSpace(status))
+	if state == "" {
+		return false, nil
+	}
+	return strings.Contains(state, "running") || strings.Contains(state, "active"), nil
+}
+
+func runDaemonServiceAction(action string, fn func(service.ServiceManager) error) error {
+	manager := service.NewServiceManager()
+	if err := fn(manager); err != nil {
+		if !needsPrivilegeEscalation(err) || privilege.IsElevated() {
+			return err
+		}
+		if relaunchErr := privilege.RelaunchElevated([]string{"daemon", strings.TrimSpace(action)}); relaunchErr != nil {
+			return relaunchErr
+		}
+	}
+	return nil
+}
+
+func needsPrivilegeEscalation(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	if message == "" {
+		return false
+	}
+	return strings.Contains(message, "root privileges required") ||
+		strings.Contains(message, "administrator privileges required") ||
+		strings.Contains(message, "permission denied") ||
+		strings.Contains(message, "operation not permitted")
 }
 
 func printSelfUpdateDownloadProgress(read, total int64) {

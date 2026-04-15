@@ -4,6 +4,7 @@ package privilege
 
 import (
 	"fmt"
+	"m2apps/internal/system"
 	"os"
 	"os/exec"
 	"runtime"
@@ -26,7 +27,13 @@ func relaunchElevated(args []string) error {
 			return fmt.Errorf("pkexec is required for privileged operation on Linux")
 		}
 
-		cmdArgs := append([]string{execPath}, args...)
+		baseDir := strings.TrimSpace(os.Getenv("M2APPS_HOME"))
+		if baseDir == "" {
+			baseDir = system.GetBaseDir()
+		}
+
+		cmdArgs := []string{"env", "M2APPS_HOME=" + baseDir, execPath}
+		cmdArgs = append(cmdArgs, args...)
 		cmd := exec.Command("pkexec", cmdArgs...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
