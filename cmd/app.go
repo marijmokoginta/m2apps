@@ -6,6 +6,7 @@ import (
 	"m2apps/internal/ui"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -21,30 +22,10 @@ var appStartCmd = &cobra.Command{
 	Short: "Start app processes",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		inputAppID := strings.TrimSpace(args[0])
-		appID, err := resolveInstalledAppID(inputAppID)
-		if err != nil {
+		if err := runAppCommand("start", args[0]); err != nil {
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			os.Exit(1)
 		}
-		if appID != inputAppID {
-			fmt.Println(ui.Info(fmt.Sprintf("[INFO] Using installed app_id: %s", appID)))
-		}
-
-		manager, err := process.NewManager()
-		if err != nil {
-			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
-			os.Exit(1)
-		}
-
-		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Starting app %s...", appID)))
-		state, err := manager.Start(appID)
-		if err != nil {
-			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
-			os.Exit(1)
-		}
-
-		fmt.Println(ui.Success(fmt.Sprintf("[OK] Started %d process(es) for %s", len(state.Processes), appID)))
 	},
 }
 
@@ -53,35 +34,10 @@ var appStopCmd = &cobra.Command{
 	Short: "Stop app processes",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		inputAppID := strings.TrimSpace(args[0])
-		appID, err := resolveInstalledAppID(inputAppID)
-		if err != nil {
+		if err := runAppCommand("stop", args[0]); err != nil {
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			os.Exit(1)
 		}
-		if appID != inputAppID {
-			fmt.Println(ui.Info(fmt.Sprintf("[INFO] Using installed app_id: %s", appID)))
-		}
-
-		manager, err := process.NewManager()
-		if err != nil {
-			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
-			os.Exit(1)
-		}
-
-		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Stopping app %s...", appID)))
-		state, err := manager.Stop(appID)
-		if err != nil {
-			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
-			os.Exit(1)
-		}
-
-		if len(state.Processes) == 0 {
-			fmt.Println(ui.Warning(fmt.Sprintf("[WARN] No process records found for %s", appID)))
-			return
-		}
-
-		fmt.Println(ui.Success(fmt.Sprintf("[OK] Stopped app %s", appID)))
 	},
 }
 
@@ -90,30 +46,10 @@ var appRestartCmd = &cobra.Command{
 	Short: "Restart app processes",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		inputAppID := strings.TrimSpace(args[0])
-		appID, err := resolveInstalledAppID(inputAppID)
-		if err != nil {
+		if err := runAppCommand("restart", args[0]); err != nil {
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			os.Exit(1)
 		}
-		if appID != inputAppID {
-			fmt.Println(ui.Info(fmt.Sprintf("[INFO] Using installed app_id: %s", appID)))
-		}
-
-		manager, err := process.NewManager()
-		if err != nil {
-			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
-			os.Exit(1)
-		}
-
-		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Restarting app %s...", appID)))
-		state, err := manager.Restart(appID)
-		if err != nil {
-			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
-			os.Exit(1)
-		}
-
-		fmt.Println(ui.Success(fmt.Sprintf("[OK] Restarted app %s (%d process(es))", appID, len(state.Processes))))
 	},
 }
 
@@ -122,41 +58,9 @@ var appStatusCmd = &cobra.Command{
 	Short: "Show app process status",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		inputAppID := strings.TrimSpace(args[0])
-		appID, err := resolveInstalledAppID(inputAppID)
-		if err != nil {
+		if err := runAppCommand("status", args[0]); err != nil {
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			os.Exit(1)
-		}
-		if appID != inputAppID {
-			fmt.Println(ui.Info(fmt.Sprintf("[INFO] Using installed app_id: %s", appID)))
-		}
-
-		manager, err := process.NewManager()
-		if err != nil {
-			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
-			os.Exit(1)
-		}
-
-		state, err := manager.Status(appID)
-		if err != nil {
-			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
-			os.Exit(1)
-		}
-
-		if len(state.Processes) == 0 {
-			fmt.Println(ui.Warning(fmt.Sprintf("[WARN] No process records found for %s", appID)))
-			return
-		}
-
-		fmt.Println(ui.Info(fmt.Sprintf("[INFO] App %s process status:", appID)))
-		for _, proc := range state.Processes {
-			command := strings.Join(proc.Command, " ")
-			if command == "" {
-				command = "-"
-			}
-
-			fmt.Printf("- %s | pid: %d | status: %s | cmd: %s\n", proc.Name, proc.PID, proc.Status, command)
 		}
 	},
 }
@@ -211,4 +115,254 @@ func resolveInstalledAppID(input string) (string, error) {
 	}
 
 	return id, nil
+}
+
+func runAppCommand(action string, inputAppID string) error {
+	appID, err := resolveInstalledAppID(inputAppID)
+	if err != nil {
+		return err
+	}
+
+	if appID != strings.TrimSpace(inputAppID) {
+		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Using installed app_id: %s", appID)))
+	}
+
+	manager, err := process.NewManager()
+	if err != nil {
+		return err
+	}
+
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "start":
+		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Starting app %s...", appID)))
+		state, err := manager.Start(appID)
+		if err != nil {
+			return err
+		}
+		fmt.Println(ui.Success(fmt.Sprintf("[OK] Started %d process(es) for %s", len(state.Processes), appID)))
+		for _, proc := range state.Processes {
+			url := inferProcessURL(proc)
+			if url != "-" {
+				fmt.Printf("- %s | pid: %d | url: %s\n", proc.Name, proc.PID, url)
+				continue
+			}
+			fmt.Printf("- %s | pid: %d\n", proc.Name, proc.PID)
+		}
+		return nil
+
+	case "stop":
+		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Stopping app %s...", appID)))
+		state, err := manager.Stop(appID)
+		if err != nil {
+			return err
+		}
+		if len(state.Processes) == 0 {
+			fmt.Println(ui.Warning(fmt.Sprintf("[WARN] No process records found for %s", appID)))
+			return nil
+		}
+		fmt.Println(ui.Success(fmt.Sprintf("[OK] Stopped app %s", appID)))
+		return nil
+
+	case "restart":
+		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Restarting app %s...", appID)))
+		state, err := manager.Restart(appID)
+		if err != nil {
+			return err
+		}
+		fmt.Println(ui.Success(fmt.Sprintf("[OK] Restarted app %s (%d process(es))", appID, len(state.Processes))))
+		return nil
+
+	case "status":
+		state, err := manager.Status(appID)
+		if err != nil {
+			return err
+		}
+		if len(state.Processes) == 0 {
+			fmt.Println(ui.Warning(fmt.Sprintf("[WARN] No process records found for %s", appID)))
+			return nil
+		}
+
+		fmt.Println(ui.Info(fmt.Sprintf("[INFO] App %s process status:", appID)))
+		fmt.Println(renderProcessStatusTable(state.Processes))
+		return nil
+
+	default:
+		return fmt.Errorf("unsupported app process action %q", action)
+	}
+}
+
+func renderProcessStatusTable(processes []process.Process) string {
+	headers := []string{"NAME", "PID", "STATUS", "URL", "COMMAND"}
+	rows := make([][]string, 0, len(processes))
+
+	widths := []int{
+		len(headers[0]),
+		len(headers[1]),
+		len(headers[2]),
+		len(headers[3]),
+		len(headers[4]),
+	}
+
+	for _, proc := range processes {
+		command := strings.Join(proc.Command, " ")
+		if command == "" {
+			command = "-"
+		}
+
+		row := []string{
+			proc.Name,
+			strconv.Itoa(proc.PID),
+			proc.Status,
+			inferProcessURL(proc),
+			command,
+		}
+		rows = append(rows, row)
+
+		for i, cell := range row {
+			if len(cell) > widths[i] {
+				widths[i] = len(cell)
+			}
+		}
+	}
+
+	border := func() string {
+		parts := make([]string, 0, len(widths))
+		for _, width := range widths {
+			parts = append(parts, strings.Repeat("-", width+2))
+		}
+		return "+" + strings.Join(parts, "+") + "+"
+	}
+
+	formatRow := func(cols []string) string {
+		cells := make([]string, 0, len(cols))
+		for i, col := range cols {
+			padded := fmt.Sprintf("%-*s", widths[i], col)
+			if i == 2 {
+				padded = colorizeProcessStatusCell(col, padded)
+			}
+			cells = append(cells, " "+padded+" ")
+		}
+		return "|" + strings.Join(cells, "|") + "|"
+	}
+
+	lines := []string{
+		border(),
+		formatRow(headers),
+		border(),
+	}
+
+	for _, row := range rows {
+		lines = append(lines, formatRow(row))
+	}
+	lines = append(lines, border())
+
+	return strings.Join(lines, "\n")
+}
+
+func colorizeProcessStatusCell(rawStatus string, paddedStatus string) string {
+	status := strings.ToLower(strings.TrimSpace(rawStatus))
+
+	switch status {
+	case "running", "started", "start", "up":
+		return ui.Success(paddedStatus)
+	case "stopped", "stop", "dead", "failed", "down":
+		return ui.Error(paddedStatus)
+	default:
+		return ui.Warning(paddedStatus)
+	}
+}
+
+func inferProcessURL(proc process.Process) string {
+	if !isWebOrServerProcess(proc.Name) {
+		return "-"
+	}
+
+	host, port := extractHostPort(proc.Command)
+	if port == "" {
+		return "-"
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+
+	return fmt.Sprintf("http://%s:%s", host, port)
+}
+
+func isWebOrServerProcess(name string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	return normalized == "web" || normalized == "server"
+}
+
+func extractHostPort(command []string) (string, string) {
+	host := ""
+	port := ""
+
+	for i := 0; i < len(command); i++ {
+		arg := strings.TrimSpace(command[i])
+		lower := strings.ToLower(arg)
+		if arg == "" {
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(lower, "--host="):
+			host = strings.TrimSpace(arg[len("--host="):])
+		case lower == "--host" && i+1 < len(command):
+			host = strings.TrimSpace(command[i+1])
+			i++
+		case strings.HasPrefix(lower, "--port="):
+			port = normalizePortToken(strings.TrimSpace(arg[len("--port="):]))
+		case lower == "--port" && i+1 < len(command):
+			port = normalizePortToken(strings.TrimSpace(command[i+1]))
+			i++
+		case strings.HasPrefix(lower, "-p="):
+			port = normalizePortToken(strings.TrimSpace(arg[len("-p="):]))
+		case lower == "-p" && i+1 < len(command):
+			port = normalizePortToken(strings.TrimSpace(command[i+1]))
+			i++
+		case strings.HasPrefix(strings.ToUpper(arg), "PORT="):
+			port = normalizePortToken(strings.TrimSpace(arg[len("PORT="):]))
+		}
+	}
+
+	if port == "" && isLaravelServeCommand(command) {
+		port = "8000"
+	}
+
+	if host == "" && port != "" {
+		host = "127.0.0.1"
+	}
+
+	if strings.Contains(host, ":") && port == "" {
+		parts := strings.Split(host, ":")
+		host = strings.TrimSpace(parts[0])
+		port = normalizePortToken(strings.TrimSpace(parts[len(parts)-1]))
+	}
+
+	return host, port
+}
+
+func normalizePortToken(input string) string {
+	value := strings.TrimSpace(input)
+	if value == "" {
+		return ""
+	}
+
+	digits := make([]rune, 0, len(value))
+	for _, ch := range value {
+		if ch >= '0' && ch <= '9' {
+			digits = append(digits, ch)
+		}
+	}
+	return string(digits)
+}
+
+func isLaravelServeCommand(command []string) bool {
+	if len(command) < 3 {
+		return false
+	}
+
+	return strings.EqualFold(strings.TrimSpace(command[0]), "php") &&
+		strings.EqualFold(strings.TrimSpace(command[1]), "artisan") &&
+		strings.EqualFold(strings.TrimSpace(command[2]), "serve")
 }

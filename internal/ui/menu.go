@@ -105,16 +105,22 @@ func (m menuModel) View() string {
 		}
 		buf.WriteString(line)
 		buf.WriteString("\n")
+		if i < len(m.items)-1 {
+			buf.WriteString("\n")
+		}
 	}
 
 	if len(m.staticItems) > 0 {
 		buf.WriteString("\n")
 		buf.WriteString(titleStyle.Render("Static Commands"))
 		buf.WriteString("\n")
-		for _, item := range m.staticItems {
+		for i, item := range m.staticItems {
 			buf.WriteString("  - ")
 			buf.WriteString(item)
 			buf.WriteString("\n")
+			if i < len(m.staticItems)-1 {
+				buf.WriteString("\n")
+			}
 		}
 	}
 

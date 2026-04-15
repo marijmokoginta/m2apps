@@ -12,12 +12,12 @@ type ProcessCommand struct {
 
 var presetCommands = map[string][]ProcessCommand{
 	"laravel": {
-		{Name: "web", Command: []string{"php", "artisan", "serve"}},
+		{Name: "web", Command: []string{"php", "artisan", "serve", "--host=127.0.0.1", "--port=8000"}},
 		{Name: "queue", Command: []string{"php", "artisan", "queue:work"}},
 		{Name: "scheduler", Command: []string{"php", "artisan", "schedule:work"}},
 	},
 	"laravel-inertia": {
-		{Name: "web", Command: []string{"php", "artisan", "serve"}},
+		{Name: "web", Command: []string{"php", "artisan", "serve", "--host=127.0.0.1", "--port=8000"}},
 		{Name: "queue", Command: []string{"php", "artisan", "queue:work"}},
 		{Name: "scheduler", Command: []string{"php", "artisan", "schedule:work"}},
 	},

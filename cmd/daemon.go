@@ -23,9 +23,11 @@ var daemonInstallCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install daemon OS service",
 	Run: func(cmd *cobra.Command, args []string) {
-		runServiceAction("Installing service...", "Service installed", "install service", func(m service.ServiceManager) error {
+		if err := runServiceAction("Installing service...", "Service installed", "install service", func(m service.ServiceManager) error {
 			return m.Install()
-		})
+		}); err != nil {
+			os.Exit(1)
+		}
 	},
 }
 
@@ -33,9 +35,11 @@ var daemonUninstallCmd = &cobra.Command{
 	Use:   "uninstall",
 	Short: "Uninstall daemon OS service",
 	Run: func(cmd *cobra.Command, args []string) {
-		runServiceAction("Uninstalling service...", "Service uninstalled", "uninstall service", func(m service.ServiceManager) error {
+		if err := runServiceAction("Uninstalling service...", "Service uninstalled", "uninstall service", func(m service.ServiceManager) error {
 			return m.Uninstall()
-		})
+		}); err != nil {
+			os.Exit(1)
+		}
 	},
 }
 
@@ -43,9 +47,11 @@ var daemonEnableCmd = &cobra.Command{
 	Use:   "enable",
 	Short: "Enable daemon service auto-start",
 	Run: func(cmd *cobra.Command, args []string) {
-		runServiceAction("Enabling service...", "Service enabled", "enable service", func(m service.ServiceManager) error {
+		if err := runServiceAction("Enabling service...", "Service enabled", "enable service", func(m service.ServiceManager) error {
 			return m.Enable()
-		})
+		}); err != nil {
+			os.Exit(1)
+		}
 	},
 }
 
@@ -53,9 +59,11 @@ var daemonDisableCmd = &cobra.Command{
 	Use:   "disable",
 	Short: "Disable daemon service auto-start",
 	Run: func(cmd *cobra.Command, args []string) {
-		runServiceAction("Disabling service...", "Service disabled", "disable service", func(m service.ServiceManager) error {
+		if err := runServiceAction("Disabling service...", "Service disabled", "disable service", func(m service.ServiceManager) error {
 			return m.Disable()
-		})
+		}); err != nil {
+			os.Exit(1)
+		}
 	},
 }
 
@@ -63,9 +71,11 @@ var daemonStartCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start daemon service",
 	Run: func(cmd *cobra.Command, args []string) {
-		runServiceAction("Starting service...", "Service started", "start service", func(m service.ServiceManager) error {
+		if err := runServiceAction("Starting service...", "Service started", "start service", func(m service.ServiceManager) error {
 			return m.Start()
-		})
+		}); err != nil {
+			os.Exit(1)
+		}
 	},
 }
 
@@ -73,9 +83,11 @@ var daemonStopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop daemon service",
 	Run: func(cmd *cobra.Command, args []string) {
-		runServiceAction("Stopping service...", "Service stopped", "stop service", func(m service.ServiceManager) error {
+		if err := runServiceAction("Stopping service...", "Service stopped", "stop service", func(m service.ServiceManager) error {
 			return m.Stop()
-		})
+		}); err != nil {
+			os.Exit(1)
+		}
 	},
 }
 
@@ -83,16 +95,9 @@ var daemonStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show daemon service status",
 	Run: func(cmd *cobra.Command, args []string) {
-		manager := service.NewServiceManager()
-
-		fmt.Println(ui.Info("[INFO] Checking service status..."))
-		status, err := manager.Status()
-		if err != nil {
-			printServiceError("check service status", err)
+		if err := runDaemonStatus(); err != nil {
 			os.Exit(1)
 		}
-
-		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Service status: %s", status)))
 	},
 }
 
@@ -136,15 +141,16 @@ func init() {
 	rootCmd.AddCommand(daemonCmd)
 }
 
-func runServiceAction(infoMessage, successMessage, action string, fn func(service.ServiceManager) error) {
+func runServiceAction(infoMessage, successMessage, action string, fn func(service.ServiceManager) error) error {
 	manager := service.NewServiceManager()
 
 	fmt.Println(ui.Info("[INFO] " + infoMessage))
 	if err := fn(manager); err != nil {
 		printServiceError(action, err)
-		os.Exit(1)
+		return err
 	}
 	fmt.Println(ui.Success("[OK] " + successMessage))
+	return nil
 }
 
 func printServiceError(action string, err error) {
@@ -154,4 +160,51 @@ func printServiceError(action string, err error) {
 		return
 	}
 	fmt.Println(ui.Error(fmt.Sprintf("[ERROR] Failed to %s: %s", action, message)))
+}
+
+func runDaemonStatus() error {
+	manager := service.NewServiceManager()
+
+	fmt.Println(ui.Info("[INFO] Checking service status..."))
+	status, err := manager.Status()
+	if err != nil {
+		printServiceError("check service status", err)
+		return err
+	}
+
+	fmt.Println(ui.Info(fmt.Sprintf("[INFO] Service status: %s", status)))
+	return nil
+}
+
+func runDaemonCommand(action string) error {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "install":
+		return runServiceAction("Installing service...", "Service installed", "install service", func(m service.ServiceManager) error {
+			return m.Install()
+		})
+	case "uninstall":
+		return runServiceAction("Uninstalling service...", "Service uninstalled", "uninstall service", func(m service.ServiceManager) error {
+			return m.Uninstall()
+		})
+	case "enable":
+		return runServiceAction("Enabling service...", "Service enabled", "enable service", func(m service.ServiceManager) error {
+			return m.Enable()
+		})
+	case "disable":
+		return runServiceAction("Disabling service...", "Service disabled", "disable service", func(m service.ServiceManager) error {
+			return m.Disable()
+		})
+	case "start":
+		return runServiceAction("Starting service...", "Service started", "start service", func(m service.ServiceManager) error {
+			return m.Start()
+		})
+	case "stop":
+		return runServiceAction("Stopping service...", "Service stopped", "stop service", func(m service.ServiceManager) error {
+			return m.Stop()
+		})
+	case "status":
+		return runDaemonStatus()
+	default:
+		return fmt.Errorf("unsupported daemon action %q", action)
+	}
 }

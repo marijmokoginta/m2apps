@@ -15,7 +15,7 @@ import (
 )
 
 const colorReset = "\033[0m"
-const appVersion = "v1.0.4"
+const appVersion = "v1.0.5"
 
 func rgb(r, g, b int) string {
 	return fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
@@ -137,6 +137,8 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+const menuActionBack = "__back__"
+
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -152,32 +154,62 @@ func init() {
 }
 
 func runInteractiveRoot(cmd *cobra.Command) error {
-	action, err := ui.RunMenu(
-		"Main Menu",
-		[]ui.MenuItem{
-			{Title: "Install Application", Action: "install"},
-			{Title: "Update Application", Action: "update"},
-			{Title: "Delete Application", Action: "delete"},
-			{Title: "Switch Channel", Action: "channel"},
-		},
-		[]string{"list", "daemon", "help"},
-	)
-	if err != nil {
-		return err
-	}
+	for {
+		action, err := ui.RunMenu(
+			"Main Menu",
+			[]ui.MenuItem{
+				{Title: "Install Application", Action: "install"},
+				{Title: "Update Application", Action: "update"},
+				{Title: "Manage Application Process", Action: "process"},
+				{Title: "Delete Application", Action: "delete"},
+				{Title: "Switch Channel", Action: "channel"},
+				{Title: "List Installed Applications", Action: "list"},
+				{Title: "Manage Daemon Service", Action: "daemon"},
+				{Title: "Help", Action: "help"},
+				{Title: "Exit", Action: "exit"},
+			},
+			nil,
+		)
+		if err != nil {
+			if errors.Is(err, ui.ErrMenuCancelled) {
+				return nil
+			}
+			return err
+		}
 
-	switch action {
-	case "install":
-		installCmd.Run(installCmd, nil)
-		return nil
-	case "update":
-		return runInteractiveUpdateFlow()
-	case "delete":
-		return runInteractiveDeleteFlow()
-	case "channel":
-		return runInteractiveChannelFlow()
-	default:
-		return nil
+		switch action {
+		case "install":
+			installCmd.Run(installCmd, nil)
+			promptBackToMainMenu()
+		case "update":
+			if err := runInteractiveUpdateFlow(); err != nil {
+				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			}
+		case "process":
+			if err := runInteractiveProcessFlow(); err != nil {
+				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			}
+		case "delete":
+			if err := runInteractiveDeleteFlow(); err != nil {
+				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			}
+		case "channel":
+			if err := runInteractiveChannelFlow(); err != nil {
+				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			}
+		case "list":
+			listCmd.Run(listCmd, nil)
+			promptBackToMainMenu()
+		case "daemon":
+			if err := runInteractiveDaemonFlow(); err != nil {
+				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+			}
+		case "help":
+			_ = cmd.Help()
+			promptBackToMainMenu()
+		case "exit":
+			return nil
+		}
 	}
 }
 
@@ -193,65 +225,82 @@ func runInteractiveUpdateFlow() error {
 	}
 	if len(apps) == 0 {
 		fmt.Println(ui.Warning("[WARN] No installed applications found."))
+		promptBackToMainMenu()
 		return nil
 	}
 
-	menuItems := toAppMenuItems(apps)
-	appID, err := ui.RunMenu("Select Application to Update", menuItems, nil)
+	appID, err := ui.RunMenu("Select Application to Update", withBackMenuItems(toAppMenuItems(apps), "Back"), nil)
 	if err != nil {
 		if errors.Is(err, ui.ErrMenuCancelled) {
 			return nil
 		}
 		return err
+	}
+	if appID == menuActionBack {
+		return nil
 	}
 
 	if err := runUpdate(appID); err != nil {
 		return fmt.Errorf("failed to update app: %w", err)
 	}
 
+	promptBackToMainMenu()
 	return nil
 }
 
 func runInteractiveChannelFlow() error {
-	apps, err := loadInstalledApps()
-	if err != nil {
-		return err
-	}
-	if len(apps) == 0 {
-		fmt.Println(ui.Warning("[WARN] No installed applications found."))
+	for {
+		apps, err := loadInstalledApps()
+		if err != nil {
+			return err
+		}
+		if len(apps) == 0 {
+			fmt.Println(ui.Warning("[WARN] No installed applications found."))
+			promptBackToMainMenu()
+			return nil
+		}
+
+		appID, err := ui.RunMenu("Select Application", withBackMenuItems(toAppMenuItems(apps), "Back"), nil)
+		if err != nil {
+			if errors.Is(err, ui.ErrMenuCancelled) {
+				return nil
+			}
+			return err
+		}
+		if appID == menuActionBack {
+			return nil
+		}
+
+		channel, err := ui.RunMenu(
+			"Select Channel",
+			withBackMenuItems(
+				[]ui.MenuItem{
+					{Title: "stable", Action: "stable"},
+					{Title: "beta", Action: "beta"},
+					{Title: "alpha", Action: "alpha"},
+				},
+				"Back",
+			),
+			nil,
+		)
+		if err != nil {
+			if errors.Is(err, ui.ErrMenuCancelled) {
+				continue
+			}
+			return err
+		}
+		if channel == menuActionBack {
+			continue
+		}
+
+		message, err := runSetChannel(appID, channel)
+		if err != nil {
+			return err
+		}
+		fmt.Println(ui.Success(message))
+		promptBackToMainMenu()
 		return nil
 	}
-
-	appID, err := ui.RunMenu("Select Application", toAppMenuItems(apps), nil)
-	if err != nil {
-		if errors.Is(err, ui.ErrMenuCancelled) {
-			return nil
-		}
-		return err
-	}
-
-	channel, err := ui.RunMenu(
-		"Select Channel",
-		[]ui.MenuItem{
-			{Title: "stable", Action: "stable"},
-			{Title: "beta", Action: "beta"},
-			{Title: "alpha", Action: "alpha"},
-		},
-		nil,
-	)
-	if err != nil {
-		if errors.Is(err, ui.ErrMenuCancelled) {
-			return nil
-		}
-		return err
-	}
-
-	message, err := runSetChannel(appID, channel)
-	if err != nil {
-		return err
-	}
-	fmt.Println(ui.Success(message))
-	return nil
 }
 
 func runInteractiveDeleteFlow() error {
@@ -261,15 +310,19 @@ func runInteractiveDeleteFlow() error {
 	}
 	if len(apps) == 0 {
 		fmt.Println(ui.Warning("[WARN] No installed applications found."))
+		promptBackToMainMenu()
 		return nil
 	}
 
-	appID, err := ui.RunMenu("Select Application to Delete", toAppMenuItems(apps), nil)
+	appID, err := ui.RunMenu("Select Application to Delete", withBackMenuItems(toAppMenuItems(apps), "Back"), nil)
 	if err != nil {
 		if errors.Is(err, ui.ErrMenuCancelled) {
 			return nil
 		}
 		return err
+	}
+	if appID == menuActionBack {
+		return nil
 	}
 
 	if err := runDelete(appID); err != nil {
@@ -277,7 +330,100 @@ func runInteractiveDeleteFlow() error {
 	}
 
 	fmt.Println(ui.Success(fmt.Sprintf("[OK] Application %s deleted", appID)))
+	promptBackToMainMenu()
 	return nil
+}
+
+func runInteractiveProcessFlow() error {
+	for {
+		apps, err := loadInstalledApps()
+		if err != nil {
+			return err
+		}
+		if len(apps) == 0 {
+			fmt.Println(ui.Warning("[WARN] No installed applications found."))
+			promptBackToMainMenu()
+			return nil
+		}
+
+		appID, err := ui.RunMenu("Select Application", withBackMenuItems(toAppMenuItems(apps), "Back"), nil)
+		if err != nil {
+			if errors.Is(err, ui.ErrMenuCancelled) {
+				return nil
+			}
+			return err
+		}
+		if appID == menuActionBack {
+			return nil
+		}
+
+		action, err := ui.RunMenu(
+			"Select Process Action",
+			withBackMenuItems(
+				[]ui.MenuItem{
+					{Title: "Start", Action: "start"},
+					{Title: "Stop", Action: "stop"},
+					{Title: "Restart", Action: "restart"},
+					{Title: "Status", Action: "status"},
+				},
+				"Back",
+			),
+			nil,
+		)
+		if err != nil {
+			if errors.Is(err, ui.ErrMenuCancelled) {
+				continue
+			}
+			return err
+		}
+		if action == menuActionBack {
+			continue
+		}
+
+		if err := runAppCommand(action, appID); err != nil {
+			return fmt.Errorf("failed to manage app process: %w", err)
+		}
+
+		promptBackToMainMenu()
+		return nil
+	}
+}
+
+func runInteractiveDaemonFlow() error {
+	for {
+		action, err := ui.RunMenu(
+			"Daemon Service",
+			withBackMenuItems(
+				[]ui.MenuItem{
+					{Title: "Install Service", Action: "install"},
+					{Title: "Uninstall Service", Action: "uninstall"},
+					{Title: "Enable Service", Action: "enable"},
+					{Title: "Disable Service", Action: "disable"},
+					{Title: "Start Service", Action: "start"},
+					{Title: "Stop Service", Action: "stop"},
+					{Title: "Status Service", Action: "status"},
+				},
+				"Back",
+			),
+			nil,
+		)
+		if err != nil {
+			if errors.Is(err, ui.ErrMenuCancelled) {
+				return nil
+			}
+			return err
+		}
+		if action == menuActionBack {
+			return nil
+		}
+
+		if err := runDaemonCommand(action); err != nil {
+			return err
+		}
+
+		promptBackToMainMenu()
+		return nil
+	}
 }
 
 func loadInstalledApps() ([]installedApp, error) {
@@ -346,4 +492,27 @@ func toAppMenuItems(apps []installedApp) []ui.MenuItem {
 		})
 	}
 	return items
+}
+
+func withBackMenuItems(items []ui.MenuItem, backTitle string) []ui.MenuItem {
+	cloned := make([]ui.MenuItem, 0, len(items)+1)
+	cloned = append(cloned, items...)
+	cloned = append(cloned, ui.MenuItem{
+		Title:  backTitle,
+		Action: menuActionBack,
+	})
+	return cloned
+}
+
+func promptBackToMainMenu() {
+	_, err := ui.RunMenu(
+		"Navigation",
+		[]ui.MenuItem{
+			{Title: "Back to Main Menu", Action: "back_to_main"},
+		},
+		nil,
+	)
+	if err != nil {
+		return
+	}
 }
