@@ -19,6 +19,11 @@ var deleteCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		appID := strings.TrimSpace(args[0])
+		if !confirmAction(fmt.Sprintf("Delete application %s?", appID)) {
+			fmt.Println(ui.Warning("[WARN] Delete cancelled."))
+			return
+		}
+
 		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Deleting application %s...", appID)))
 
 		if err := runDelete(appID); err != nil {

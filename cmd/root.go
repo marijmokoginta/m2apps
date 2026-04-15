@@ -1,3 +1,5 @@
+// Copyright (c) M2CodeApps
+// Author: Marij Mokoginta
 package cmd
 
 import (
@@ -12,12 +14,13 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
 
 const colorReset = "\033[0m"
-const appVersion = "v1.1.5"
+const appVersion = "v1.1.6"
 
 func rgb(r, g, b int) string {
 	return fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
@@ -116,6 +119,8 @@ func printBanner() {
 
 	author := "  by Marij Mokoginta"
 	fmt.Println(gradientLine(author, 255, 200, 180, 255, 100, 80))
+	copyright := fmt.Sprintf("  Copyright (c) %d M2CodeApps", time.Now().Year())
+	fmt.Println(gradientLine(copyright, 180, 220, 255, 120, 180, 255))
 
 	fmt.Println()
 }
@@ -150,6 +155,7 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(deleteCmd)
 	rootCmd.AddCommand(listCmd)
+	rootCmd.SetVersionTemplate(fmt.Sprintf("{{with .Name}}{{printf \"%%s \" .}}{{end}}{{printf \"version %%s\\n\" .Version}}Copyright (c) %d M2CodeApps\n", time.Now().Year()))
 }
 
 func runInteractiveRoot(cmd *cobra.Command) error {
@@ -216,7 +222,7 @@ func runInteractiveRoot(cmd *cobra.Command) error {
 				promptBackToMainMenu()
 			}
 		case "help":
-			_ = cmd.Help()
+			runInteractiveHelpScreen()
 			promptBackToMainMenu()
 		case "exit":
 			return nil
@@ -366,6 +372,12 @@ func runInteractiveChannelFlow() error {
 			continue
 		}
 
+		if !confirmAction(fmt.Sprintf("Switch app %s to %s channel?", appID, channel)) {
+			fmt.Println(ui.Warning("[WARN] Channel switch cancelled."))
+			promptBackToMainMenu()
+			return nil
+		}
+
 		message, err := runSetChannel(appID, channel)
 		if err != nil {
 			return err
@@ -395,6 +407,11 @@ func runInteractiveDeleteFlow() error {
 		return err
 	}
 	if appID == menuActionBack {
+		return nil
+	}
+	if !confirmAction(fmt.Sprintf("Delete application %s?", appID)) {
+		fmt.Println(ui.Warning("[WARN] Delete cancelled."))
+		promptBackToMainMenu()
 		return nil
 	}
 
@@ -640,5 +657,13 @@ func runInteractiveMenu(title string, items []ui.MenuItem, staticItems []string)
 func refreshInteractiveScreen() {
 	fmt.Print("\033[H\033[2J")
 	printBanner()
-	fmt.Printf("%s %s\n\n", ui.Info("[INFO] Version:"), appVersion)
+	fmt.Printf("%s %s\n", ui.Info("[INFO] Version:"), appVersion)
+	fmt.Printf("%s Copyright (c) %d M2CodeApps\n\n", ui.Info("[INFO]"), time.Now().Year())
+}
+
+func runInteractiveHelpScreen() {
+	fmt.Println(ui.Info("[INFO] Help"))
+	fmt.Println(ui.Info("[INFO] This CLI uses interactive menu for install, update, process, delete, channel, list, and daemon operations."))
+	fmt.Println(ui.Info("[INFO] Full documentation: https://github.com/marijmokoginta/m2apps"))
+	fmt.Println(ui.Info(fmt.Sprintf("[INFO] Copyright (c) %d M2CodeApps", time.Now().Year())))
 }

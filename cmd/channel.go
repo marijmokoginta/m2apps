@@ -22,6 +22,10 @@ var channelSetCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		appID := strings.TrimSpace(args[0])
 		channel := normalizeChannelInput(args[1])
+		if !confirmAction(fmt.Sprintf("Switch app %s to %s channel?", appID, channel)) {
+			fmt.Println(ui.Warning("[WARN] Channel switch cancelled."))
+			return
+		}
 
 		message, err := runSetChannel(appID, channel)
 		if err != nil {
