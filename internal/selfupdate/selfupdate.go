@@ -11,6 +11,7 @@ import (
 	"m2apps/internal/downloader"
 	"m2apps/internal/github"
 	"m2apps/internal/system"
+	"m2apps/internal/ui"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,16 +107,31 @@ func Update(currentVersion string) error {
 	}
 
 	dl := downloader.New("")
-	if err := dl.Download(asset.URL, archivePath, nil); err != nil {
+	fmt.Println(ui.Info(fmt.Sprintf("[INFO] Downloading update package: %s", asset.Name)))
+	downloadProgress := func(read, total int64) {
+		printSelfUpdateDownloadProgress(read, total)
+	}
+	if err := dl.Download(asset.URL, archivePath, downloadProgress); err != nil {
+		fmt.Println()
 		return err
 	}
+	fmt.Println()
+	fmt.Println(ui.Success("[OK] Update package downloaded"))
 
 	newBinaryPath := filepath.Join(os.TempDir(), "m2apps_new"+executableSuffix())
+	installSpinner := ui.NewSpinner()
+	installSpinner.Start("[INFO] Installing self-update...")
+	stopInstallSpinner := func(message string) {
+		installSpinner.Stop(message)
+	}
+
 	if err := extractBinaryFromArchive(archivePath, newBinaryPath); err != nil {
+		stopInstallSpinner(ui.Error(fmt.Sprintf("[FAIL] Install update failed: %v", err)))
 		return err
 	}
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(newBinaryPath, 0o755); err != nil {
+			stopInstallSpinner(ui.Error(fmt.Sprintf("[FAIL] Install update failed: %v", err)))
 			return fmt.Errorf("failed to make updated binary executable: %w", err)
 		}
 	}
@@ -127,15 +143,19 @@ func Update(currentVersion string) error {
 
 	if runtime.GOOS == "windows" {
 		if err := launchWindowsUpdater(execPath, newBinaryPath); err != nil {
+			stopInstallSpinner(ui.Error(fmt.Sprintf("[FAIL] Install update failed: %v", err)))
 			return err
 		}
+		stopInstallSpinner(ui.Success("[OK] Install update completed"))
 		_ = SaveSkippedVersion("")
 		return ErrRestartScheduled
 	}
 
 	if err := applyAndRestart(execPath, newBinaryPath); err != nil {
+		stopInstallSpinner(ui.Error(fmt.Sprintf("[FAIL] Install update failed: %v", err)))
 		return err
 	}
+	stopInstallSpinner(ui.Success("[OK] Install update completed"))
 	_ = SaveSkippedVersion("")
 	return ErrRestartScheduled
 }
@@ -512,4 +532,47 @@ func isPIDRunning(pid int) bool {
 		return false
 	}
 	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+func printSelfUpdateDownloadProgress(read, total int64) {
+	if total <= 0 {
+		fmt.Printf("\r[INFO] Downloaded %s", formatSelfUpdateBytes(read))
+		return
+	}
+
+	percent := int(float64(read) * 100 / float64(total))
+	if percent > 100 {
+		percent = 100
+	}
+	if percent < 0 {
+		percent = 0
+	}
+
+	const barWidth = 10
+	filled := percent * barWidth / 100
+	if filled > barWidth {
+		filled = barWidth
+	}
+
+	bar := strings.Repeat("=", filled) + strings.Repeat("-", barWidth-filled)
+	fmt.Printf("\r[%s] %d%% (%s / %s)", bar, percent, formatSelfUpdateBytes(read), formatSelfUpdateBytes(total))
+}
+
+func formatSelfUpdateBytes(size int64) string {
+	if size < 1024 {
+		return strconv.FormatInt(size, 10) + "B"
+	}
+
+	kb := float64(size) / 1024
+	if kb < 1024 {
+		return fmt.Sprintf("%.1fKB", kb)
+	}
+
+	mb := kb / 1024
+	if mb < 1024 {
+		return fmt.Sprintf("%.1fMB", mb)
+	}
+
+	gb := mb / 1024
+	return fmt.Sprintf("%.1fGB", gb)
 }
