@@ -17,7 +17,7 @@ import (
 )
 
 const colorReset = "\033[0m"
-const appVersion = "v1.1.2"
+const appVersion = "v1.1.3"
 
 func rgb(r, g, b int) string {
 	return fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
@@ -256,10 +256,18 @@ func runSelfUpdateFlow() (bool, error) {
 		if err := selfupdate.Update(appVersion); err != nil {
 			if errors.Is(err, selfupdate.ErrRestartScheduled) {
 				fmt.Println(ui.Success("[OK] Update applied. Restarting m2apps..."))
+				fmt.Println(ui.Info("[INFO] Press Enter to continue and close current process..."))
+				reader := bufio.NewReader(os.Stdin)
+				_, _ = reader.ReadString('\n')
 				return true, nil
 			}
-			return false, err
+			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] Self-update failed: %v", err)))
+			promptBackToMainMenu()
+			return false, nil
 		}
+		fmt.Println(ui.Success("[OK] Self-update completed."))
+		fmt.Println(ui.Info("[INFO] Restart m2apps to use the new version."))
+		promptBackToMainMenu()
 		return false, nil
 	case "skip_once":
 		return false, nil

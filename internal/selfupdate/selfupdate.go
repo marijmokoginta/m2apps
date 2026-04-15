@@ -151,13 +151,13 @@ func Update(currentVersion string) error {
 		return ErrRestartScheduled
 	}
 
-	if err := applyAndRestart(execPath, newBinaryPath); err != nil {
+	if err := replaceBinary(execPath, newBinaryPath); err != nil {
 		stopInstallSpinner(ui.Error(fmt.Sprintf("[FAIL] Install update failed: %v", err)))
 		return err
 	}
 	stopInstallSpinner(ui.Success("[OK] Install update completed"))
 	_ = SaveSkippedVersion("")
-	return ErrRestartScheduled
+	return nil
 }
 
 func RunInternalSelfUpdate(targetPath, newBinaryPath string, parentPID int) error {
@@ -554,7 +554,7 @@ func printSelfUpdateDownloadProgress(read, total int64) {
 		filled = barWidth
 	}
 
-	bar := strings.Repeat("=", filled) + strings.Repeat("-", barWidth-filled)
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
 	fmt.Printf("\r[%s] %d%% (%s / %s)", bar, percent, formatSelfUpdateBytes(read), formatSelfUpdateBytes(total))
 }
 
