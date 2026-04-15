@@ -126,7 +126,7 @@ func (m menuModel) View() string {
 
 	buf.WriteString("\n")
 	buf.WriteString(hintStyle.Render("Use ↑/↓ to navigate, Enter to select, Esc to exit."))
-	buf.WriteString("\n")
+	buf.WriteString("\n\n")
 	return buf.String()
 }
 

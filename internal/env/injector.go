@@ -4,10 +4,31 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 func Inject(installPath string, vars map[string]string) error {
+	return injectWithPlaceholders(installPath, vars, nil)
+}
+
+func InjectAppURL(installPath string, port int) error {
+	if port <= 0 {
+		return nil
+	}
+
+	return injectWithPlaceholders(
+		installPath,
+		map[string]string{
+			"APP_URL": "http://127.0.0.1:{PORT}",
+		},
+		map[string]string{
+			"PORT": strconv.Itoa(port),
+		},
+	)
+}
+
+func injectWithPlaceholders(installPath string, vars map[string]string, placeholders map[string]string) error {
 	targetFile, err := resolveTargetEnvFile(installPath)
 	if err != nil {
 		return err
@@ -23,7 +44,9 @@ func Inject(installPath string, vars map[string]string) error {
 		if _, exists := entries[key]; exists {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("%s=%s", key, value))
+
+		resolved := applyPlaceholders(value, placeholders)
+		lines = append(lines, fmt.Sprintf("%s=%s", key, resolved))
 	}
 
 	if len(lines) == 0 {
@@ -53,6 +76,19 @@ func Inject(installPath string, vars map[string]string) error {
 	}
 
 	return nil
+}
+
+func applyPlaceholders(value string, placeholders map[string]string) string {
+	if strings.TrimSpace(value) == "" || len(placeholders) == 0 {
+		return value
+	}
+
+	resolved := value
+	for key, replacement := range placeholders {
+		token := "{" + strings.TrimSpace(key) + "}"
+		resolved = strings.ReplaceAll(resolved, token, replacement)
+	}
+	return resolved
 }
 
 func resolveTargetEnvFile(installPath string) (string, error) {

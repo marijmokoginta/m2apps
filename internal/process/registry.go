@@ -142,10 +142,18 @@ func normalizeProcesses(processes []Process) []Process {
 		out = append(out, Process{
 			Name:    name,
 			PID:     process.PID,
+			Port:    normalizePort(process.Port),
 			Command: command,
 			Status:  status,
 		})
 	}
 
 	return out
+}
+
+func normalizePort(port int) int {
+	if port < 0 {
+		return 0
+	}
+	return port
 }

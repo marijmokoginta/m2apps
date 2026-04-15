@@ -12,12 +12,12 @@ type ProcessCommand struct {
 
 var presetCommands = map[string][]ProcessCommand{
 	"laravel": {
-		{Name: "web", Command: []string{"php", "artisan", "serve", "--host=127.0.0.1", "--port=8000"}},
+		{Name: "web", Command: []string{"php", "artisan", "serve", "--host=127.0.0.1", "--port={PORT}"}},
 		{Name: "queue", Command: []string{"php", "artisan", "queue:work"}},
 		{Name: "scheduler", Command: []string{"php", "artisan", "schedule:work"}},
 	},
 	"laravel-inertia": {
-		{Name: "web", Command: []string{"php", "artisan", "serve", "--host=127.0.0.1", "--port=8000"}},
+		{Name: "web", Command: []string{"php", "artisan", "serve", "--host=127.0.0.1", "--port={PORT}"}},
 		{Name: "queue", Command: []string{"php", "artisan", "queue:work"}},
 		{Name: "scheduler", Command: []string{"php", "artisan", "schedule:work"}},
 	},
@@ -27,6 +27,28 @@ var presetCommands = map[string][]ProcessCommand{
 	"nodejs": {
 		{Name: "app", Command: []string{"npm", "run", "start"}},
 	},
+}
+
+var defaultPorts = map[string]int{
+	"laravel":         8000,
+	"laravel-inertia": 8000,
+	"node":            3000,
+	"nodejs":          3000,
+	"nextjs":          3000,
+	"flutter":         5000,
+}
+
+func DefaultPort(name string) int {
+	key := strings.TrimSpace(strings.ToLower(name))
+	if key == "" {
+		return 0
+	}
+
+	port, ok := defaultPorts[key]
+	if !ok {
+		return 0
+	}
+	return port
 }
 
 func LoadPreset(name string) ([]ProcessCommand, error) {

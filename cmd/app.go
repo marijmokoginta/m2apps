@@ -139,7 +139,8 @@ func runAppCommand(action string, inputAppID string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(ui.Success(fmt.Sprintf("[OK] Started %d process(es) for %s", len(state.Processes), appID)))
+		fmt.Println(ui.Success("[OK] App started"))
+		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Started %d process(es) for %s", len(state.Processes), appID)))
 		for _, proc := range state.Processes {
 			url := inferProcessURL(proc)
 			if url != "-" {
@@ -147,6 +148,9 @@ func runAppCommand(action string, inputAppID string) error {
 				continue
 			}
 			fmt.Printf("- %s | pid: %d\n", proc.Name, proc.PID)
+		}
+		if appURL := inferAppURL(state.Processes); appURL != "-" {
+			fmt.Println(ui.Info(fmt.Sprintf("URL: %s", appURL)))
 		}
 		return nil
 
@@ -277,15 +281,20 @@ func inferProcessURL(proc process.Process) string {
 		return "-"
 	}
 
-	host, port := extractHostPort(proc.Command)
-	if port == "" {
+	host, parsedPort := extractHostPort(proc.Command)
+	port := proc.Port
+	if port <= 0 && parsedPort != "" {
+		port = atoiOrZero(parsedPort)
+	}
+	if port <= 0 {
 		return "-"
 	}
+
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "127.0.0.1"
 	}
 
-	return fmt.Sprintf("http://%s:%s", host, port)
+	return fmt.Sprintf("http://%s:%d", host, port)
 }
 
 func isWebOrServerProcess(name string) bool {
@@ -355,6 +364,41 @@ func normalizePortToken(input string) string {
 		}
 	}
 	return string(digits)
+}
+
+func inferAppURL(processes []process.Process) string {
+	for _, proc := range processes {
+		if url := inferProcessURL(proc); url != "-" {
+			return url
+		}
+	}
+
+	for _, proc := range processes {
+		if proc.Port <= 0 {
+			continue
+		}
+
+		host, _ := extractHostPort(proc.Command)
+		if host == "" || host == "0.0.0.0" || host == "::" {
+			host = "127.0.0.1"
+		}
+
+		return fmt.Sprintf("http://%s:%d", host, proc.Port)
+	}
+
+	return "-"
+}
+
+func atoiOrZero(input string) int {
+	value := strings.TrimSpace(input)
+	if value == "" {
+		return 0
+	}
+	number, err := strconv.Atoi(value)
+	if err != nil {
+		return 0
+	}
+	return number
 }
 
 func isLaravelServeCommand(command []string) bool {

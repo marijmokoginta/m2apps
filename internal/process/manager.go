@@ -2,6 +2,8 @@ package process
 
 import (
 	"fmt"
+	"m2apps/internal/env"
+	"m2apps/internal/network"
 	appruntime "m2apps/internal/runtime"
 	"m2apps/internal/storage"
 	"m2apps/internal/system"
@@ -64,6 +66,8 @@ func (m *Manager) Start(appID string) (AppProcesses, error) {
 		}
 	}
 
+	resolvedPort := m.resolveRuntimePort(cfg.Preset, current.Processes)
+
 	logFile, err := openAppLogFile(id)
 	if err != nil {
 		return AppProcesses{}, err
@@ -72,7 +76,12 @@ func (m *Manager) Start(appID string) (AppProcesses, error) {
 
 	started := make([]Process, 0, len(processDefs))
 	for _, def := range processDefs {
-		cmd := system.NewProcessCommand(def.Command[0], def.Command[1:]...)
+		command := applyPortPlaceholder(def.Command, resolvedPort)
+		if len(command) == 0 {
+			continue
+		}
+
+		cmd := system.NewProcessCommand(command[0], command[1:]...)
 		cmd.Dir = workDir
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
@@ -88,7 +97,8 @@ func (m *Manager) Start(appID string) (AppProcesses, error) {
 		started = append(started, Process{
 			Name:    strings.TrimSpace(def.Name),
 			PID:     cmd.Process.Pid,
-			Command: append([]string{}, def.Command...),
+			Port:    resolvedPort,
+			Command: command,
 			Status:  "running",
 		})
 
@@ -100,6 +110,13 @@ func (m *Manager) Start(appID string) (AppProcesses, error) {
 			_ = stopByPID(created.PID)
 		}
 		return AppProcesses{}, err
+	}
+
+	if err := env.InjectAppURL(workDir, resolvedPort); err != nil {
+		for _, created := range started {
+			_ = stopByPID(created.PID)
+		}
+		return AppProcesses{}, fmt.Errorf("failed to inject APP_URL into env: %w", err)
 	}
 
 	return AppProcesses{
@@ -281,4 +298,42 @@ func isProcessAlive(pid int) bool {
 
 	_, err := system.CombinedOutput("kill", "-0", pidValue)
 	return err == nil
+}
+
+func (m *Manager) resolveRuntimePort(preset string, existing []Process) int {
+	basePort := appruntime.DefaultPort(preset)
+	if basePort <= 0 {
+		return 0
+	}
+
+	storedPort := findStoredPort(existing)
+	if storedPort > 0 && network.IsPortAvailable(storedPort) {
+		return storedPort
+	}
+
+	return network.ResolvePort(basePort)
+}
+
+func findStoredPort(processes []Process) int {
+	for _, process := range processes {
+		if process.Port > 0 {
+			return process.Port
+		}
+	}
+	return 0
+}
+
+func applyPortPlaceholder(command []string, port int) []string {
+	resolved := make([]string, 0, len(command))
+	for _, part := range command {
+		item := strings.TrimSpace(part)
+		if item == "" {
+			continue
+		}
+		if port > 0 {
+			item = strings.ReplaceAll(item, "{PORT}", strconv.Itoa(port))
+		}
+		resolved = append(resolved, item)
+	}
+	return resolved
 }

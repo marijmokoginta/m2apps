@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"m2apps/internal/storage"
@@ -15,7 +16,7 @@ import (
 )
 
 const colorReset = "\033[0m"
-const appVersion = "v1.0.5"
+const appVersion = "v1.0.6"
 
 func rgb(r, g, b int) string {
 	return fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
@@ -123,9 +124,6 @@ var rootCmd = &cobra.Command{
 	Short:   "M2Apps CLI",
 	Version: appVersion,
 	Run: func(cmd *cobra.Command, args []string) {
-		printBanner()
-		fmt.Printf("%s %s\n\n", ui.Info("[INFO] Version:"), appVersion)
-
 		if err := runInteractiveRoot(cmd); err != nil {
 			if errors.Is(err, ui.ErrMenuCancelled) {
 				return
@@ -155,7 +153,7 @@ func init() {
 
 func runInteractiveRoot(cmd *cobra.Command) error {
 	for {
-		action, err := ui.RunMenu(
+		action, err := runInteractiveMenu(
 			"Main Menu",
 			[]ui.MenuItem{
 				{Title: "Install Application", Action: "install"},
@@ -184,18 +182,22 @@ func runInteractiveRoot(cmd *cobra.Command) error {
 		case "update":
 			if err := runInteractiveUpdateFlow(); err != nil {
 				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+				promptBackToMainMenu()
 			}
 		case "process":
 			if err := runInteractiveProcessFlow(); err != nil {
 				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+				promptBackToMainMenu()
 			}
 		case "delete":
 			if err := runInteractiveDeleteFlow(); err != nil {
 				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+				promptBackToMainMenu()
 			}
 		case "channel":
 			if err := runInteractiveChannelFlow(); err != nil {
 				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+				promptBackToMainMenu()
 			}
 		case "list":
 			listCmd.Run(listCmd, nil)
@@ -203,6 +205,7 @@ func runInteractiveRoot(cmd *cobra.Command) error {
 		case "daemon":
 			if err := runInteractiveDaemonFlow(); err != nil {
 				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+				promptBackToMainMenu()
 			}
 		case "help":
 			_ = cmd.Help()
@@ -229,7 +232,7 @@ func runInteractiveUpdateFlow() error {
 		return nil
 	}
 
-	appID, err := ui.RunMenu("Select Application to Update", withBackMenuItems(toAppMenuItems(apps), "Back"), nil)
+	appID, err := runInteractiveMenu("Select Application to Update", withBackMenuItems(toAppMenuItems(apps), "Back"), nil)
 	if err != nil {
 		if errors.Is(err, ui.ErrMenuCancelled) {
 			return nil
@@ -260,7 +263,7 @@ func runInteractiveChannelFlow() error {
 			return nil
 		}
 
-		appID, err := ui.RunMenu("Select Application", withBackMenuItems(toAppMenuItems(apps), "Back"), nil)
+		appID, err := runInteractiveMenu("Select Application", withBackMenuItems(toAppMenuItems(apps), "Back"), nil)
 		if err != nil {
 			if errors.Is(err, ui.ErrMenuCancelled) {
 				return nil
@@ -271,7 +274,7 @@ func runInteractiveChannelFlow() error {
 			return nil
 		}
 
-		channel, err := ui.RunMenu(
+		channel, err := runInteractiveMenu(
 			"Select Channel",
 			withBackMenuItems(
 				[]ui.MenuItem{
@@ -314,7 +317,7 @@ func runInteractiveDeleteFlow() error {
 		return nil
 	}
 
-	appID, err := ui.RunMenu("Select Application to Delete", withBackMenuItems(toAppMenuItems(apps), "Back"), nil)
+	appID, err := runInteractiveMenu("Select Application to Delete", withBackMenuItems(toAppMenuItems(apps), "Back"), nil)
 	if err != nil {
 		if errors.Is(err, ui.ErrMenuCancelled) {
 			return nil
@@ -346,7 +349,7 @@ func runInteractiveProcessFlow() error {
 			return nil
 		}
 
-		appID, err := ui.RunMenu("Select Application", withBackMenuItems(toAppMenuItems(apps), "Back"), nil)
+		appID, err := runInteractiveMenu("Select Application", withBackMenuItems(toAppMenuItems(apps), "Back"), nil)
 		if err != nil {
 			if errors.Is(err, ui.ErrMenuCancelled) {
 				return nil
@@ -357,7 +360,7 @@ func runInteractiveProcessFlow() error {
 			return nil
 		}
 
-		action, err := ui.RunMenu(
+		action, err := runInteractiveMenu(
 			"Select Process Action",
 			withBackMenuItems(
 				[]ui.MenuItem{
@@ -391,7 +394,7 @@ func runInteractiveProcessFlow() error {
 
 func runInteractiveDaemonFlow() error {
 	for {
-		action, err := ui.RunMenu(
+		action, err := runInteractiveMenu(
 			"Daemon Service",
 			withBackMenuItems(
 				[]ui.MenuItem{
@@ -505,14 +508,19 @@ func withBackMenuItems(items []ui.MenuItem, backTitle string) []ui.MenuItem {
 }
 
 func promptBackToMainMenu() {
-	_, err := ui.RunMenu(
-		"Navigation",
-		[]ui.MenuItem{
-			{Title: "Back to Main Menu", Action: "back_to_main"},
-		},
-		nil,
-	)
-	if err != nil {
-		return
-	}
+	fmt.Println()
+	fmt.Println(ui.Info("[INFO] Press Enter to back to Main Menu..."))
+	reader := bufio.NewReader(os.Stdin)
+	_, _ = reader.ReadString('\n')
+}
+
+func runInteractiveMenu(title string, items []ui.MenuItem, staticItems []string) (string, error) {
+	refreshInteractiveScreen()
+	return ui.RunMenu(title, items, staticItems)
+}
+
+func refreshInteractiveScreen() {
+	fmt.Print("\033[H\033[2J")
+	printBanner()
+	fmt.Printf("%s %s\n\n", ui.Info("[INFO] Version:"), appVersion)
 }
