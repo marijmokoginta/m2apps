@@ -89,6 +89,34 @@ install_binary() {
   fi
 }
 
+ensure_supervisor_popup_if_needed() {
+  local os_name="$1"
+  shift
+
+  if [[ "${os_name}" != "linux" ]]; then
+    return
+  fi
+
+  if [[ -w "$(dirname "${TARGET}")" || "${EUID:-$(id -u)}" -eq 0 ]]; then
+    return
+  fi
+
+  if [[ "${M2APPS_ELEVATED:-0}" == "1" ]]; then
+    fail "administrator privileges are required to install into ${TARGET}"
+  fi
+
+  if ! command -v pkexec >/dev/null 2>&1; then
+    fail "pkexec is required for Linux privilege popup"
+  fi
+
+  log "Supervisor permission required. Opening OS authentication popup..."
+  exec pkexec env \
+    "M2APPS_ELEVATED=1" \
+    "M2APPS_REPO_OWNER=${REPO_OWNER}" \
+    "M2APPS_REPO_NAME=${REPO_NAME}" \
+    bash "$0" "$@"
+}
+
 validate_installation() {
   if command -v m2apps >/dev/null 2>&1; then
     m2apps --version >/dev/null 2>&1 || fail "installation validation failed: m2apps --version"
@@ -104,6 +132,8 @@ main() {
   os="$(resolve_os)"
   arch="$(resolve_arch)"
   asset_name="m2apps-${os}-${arch}.tar.gz"
+
+  ensure_supervisor_popup_if_needed "${os}" "$@"
 
   log "Repository: ${REPO_OWNER}/${REPO_NAME}"
   log "Detected target asset: ${asset_name}"

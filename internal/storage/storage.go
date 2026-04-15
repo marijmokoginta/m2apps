@@ -74,9 +74,17 @@ func (s *FileStorage) Load(appID string) (AppConfig, error) {
 		return AppConfig{}, err
 	}
 
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(plain, &raw); err != nil {
+		return AppConfig{}, fmt.Errorf("failed to deserialize app config: %w", err)
+	}
+
 	var cfg AppConfig
 	if err := json.Unmarshal(plain, &cfg); err != nil {
 		return AppConfig{}, fmt.Errorf("failed to deserialize app config: %w", err)
+	}
+	if _, ok := raw["auto_start"]; !ok {
+		cfg.AutoStart = true
 	}
 
 	return cfg, nil

@@ -1,13 +1,13 @@
 //go:build windows
 
-package daemon
+package selfupdate
 
 import (
 	"os/exec"
 	"syscall"
 )
 
-func configureDaemonProcess(cmd *exec.Cmd) {
+func configureUpdaterProcess(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
 	}

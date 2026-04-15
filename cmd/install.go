@@ -154,6 +154,7 @@ var installCmd = &cobra.Command{
 			Version:     release.TagName,
 			Channel:     channel,
 			Preset:      cfg.Preset,
+			AutoStart:   true,
 		}
 
 		daemonManager, err := daemon.NewManager()

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"m2apps/internal/api"
+	procman "m2apps/internal/process"
 	"m2apps/internal/progress"
 	"m2apps/internal/storage"
 	"m2apps/internal/system"
@@ -14,11 +15,18 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
+
+type AppProcess struct {
+	AppID string
+	Name  string
+	PID   int
+}
 
 type Manager struct {
 	baseDir  string
@@ -41,6 +49,9 @@ func (m *Manager) Install() error {
 	if err := os.MkdirAll(m.baseDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create daemon directory: %w", err)
 	}
+	if err := os.MkdirAll(system.GetLogDir(), 0o755); err != nil {
+		return fmt.Errorf("failed to create daemon log directory: %w", err)
+	}
 	return nil
 }
 
@@ -59,17 +70,21 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("failed to resolve executable path: %w", err)
 	}
 
-	cmd := system.NewProcessCommand(execPath, "daemon", "run")
-	devNull, _ := os.OpenFile(os.DevNull, os.O_WRONLY, 0o644)
-	if devNull != nil {
-		defer devNull.Close()
-		cmd.Stdout = devNull
-		cmd.Stderr = devNull
+	logFile, err := m.openDaemonLogFile()
+	if err != nil {
+		return err
 	}
+	defer logFile.Close()
+
+	cmd := system.NewProcessCommand(execPath, "daemon", "run")
+	cmd.Stdin = nil
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 	cmd.Env = append(os.Environ(), "M2APPS_DAEMON=1")
 	configureDaemonProcess(cmd)
 
 	if err := cmd.Start(); err != nil {
+		m.logErrorf("failed to start daemon process: %v", err)
 		return fmt.Errorf("failed to start daemon process: %w", err)
 	}
 	_ = cmd.Process.Release()
@@ -82,7 +97,8 @@ func (m *Manager) Start() error {
 		time.Sleep(150 * time.Millisecond)
 	}
 
-	return fmt.Errorf("daemon start timed out")
+	m.logErrorf("daemon start timed out waiting for runtime files")
+	return fmt.Errorf("daemon start timed out (check log: %s)", daemonLogPath())
 }
 
 func (m *Manager) Stop() error {
@@ -100,7 +116,6 @@ func (m *Manager) Stop() error {
 	}
 
 	_ = os.Remove(m.pidFile)
-	_ = os.Remove(m.portFile)
 	return nil
 }
 
@@ -128,20 +143,25 @@ func (m *Manager) RunForeground(ctx context.Context) error {
 
 	store, err := storage.New()
 	if err != nil {
+		m.logErrorf("failed to initialize storage: %v", err)
 		return err
 	}
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, port, err := m.bindListener()
 	if err != nil {
-		return fmt.Errorf("failed to start daemon listener: %w", err)
+		m.logErrorf("failed to bind daemon listener: %v", err)
+		return err
 	}
 	defer listener.Close()
 
-	port := listener.Addr().(*net.TCPAddr).Port
 	if err := m.writeRuntimeFiles(os.Getpid(), port); err != nil {
+		m.logErrorf("failed to write daemon runtime files: %v", err)
 		return err
 	}
 	defer m.cleanupRuntimeFiles()
+
+	m.logInfof("daemon started pid=%d port=%d", os.Getpid(), port)
+	m.autoStartApps(store)
 
 	server := api.NewServer(store, progress.DefaultManager())
 
@@ -153,8 +173,12 @@ func (m *Manager) RunForeground(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		_ = server.Shutdown()
+		m.logInfof("daemon shutdown requested")
 		return nil
 	case err := <-errCh:
+		if err != nil {
+			m.logErrorf("daemon runtime error: %v", err)
+		}
 		return err
 	}
 }
@@ -265,7 +289,6 @@ func (m *Manager) writeRuntimeFiles(pid, port int) error {
 
 func (m *Manager) cleanupRuntimeFiles() {
 	_ = os.Remove(m.pidFile)
-	_ = os.Remove(m.portFile)
 }
 
 func (m *Manager) readPID() (int, error) {
@@ -304,4 +327,177 @@ func (m *Manager) isRunning() (bool, error) {
 	}
 
 	return false, nil
+}
+
+func (m *Manager) bindListener() (net.Listener, int, error) {
+	if savedPort, ok := m.readSavedPort(); ok {
+		addr := fmt.Sprintf("127.0.0.1:%d", savedPort)
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			if isAddressInUse(err) {
+				return nil, 0, fmt.Errorf("daemon port %d is already in use", savedPort)
+			}
+			return nil, 0, fmt.Errorf("failed to bind daemon listener on %s: %w", addr, err)
+		}
+		return listener, savedPort, nil
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to start daemon listener: %w", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	return listener, port, nil
+}
+
+func (m *Manager) readSavedPort() (int, bool) {
+	raw, err := os.ReadFile(m.portFile)
+	if err != nil {
+		return 0, false
+	}
+	port, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || port <= 0 {
+		return 0, false
+	}
+	return port, true
+}
+
+func isAddressInUse(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "address already in use") ||
+		strings.Contains(message, "only one usage of each socket address")
+}
+
+func (m *Manager) openDaemonLogFile() (*os.File, error) {
+	if err := os.MkdirAll(system.GetLogDir(), 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create daemon log directory: %w", err)
+	}
+	logFile, err := os.OpenFile(daemonLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open daemon log file: %w", err)
+	}
+	return logFile, nil
+}
+
+func (m *Manager) logInfof(format string, args ...any) {
+	m.logWithLevel("INFO", format, args...)
+}
+
+func (m *Manager) logErrorf(format string, args ...any) {
+	m.logWithLevel("ERROR", format, args...)
+}
+
+func (m *Manager) logWithLevel(level, format string, args ...any) {
+	prefix := strings.ToUpper(strings.TrimSpace(level))
+	if prefix == "" {
+		prefix = "INFO"
+	}
+	message := strings.TrimSpace(fmt.Sprintf(format, args...))
+	if message == "" {
+		return
+	}
+
+	_ = AppendRuntimeLog(prefix, message)
+}
+
+func (m *Manager) autoStartApps(store storage.Storage) {
+	cfgs, err := m.loadInstalledApps(store)
+	if err != nil {
+		m.logErrorf("failed to load installed apps: %v", err)
+		return
+	}
+
+	pm, err := procman.NewManager()
+	if err != nil {
+		m.logErrorf("failed to initialize process manager: %v", err)
+		return
+	}
+
+	started := make([]AppProcess, 0)
+	for _, cfg := range cfgs {
+		if !cfg.AutoStart {
+			m.logInfof("auto-start disabled for app %s", cfg.AppID)
+			continue
+		}
+
+		status, err := pm.Status(cfg.AppID)
+		if err == nil && hasRunningProcess(status.Processes) {
+			m.logInfof("skip auto-start for app %s because process is already running", cfg.AppID)
+			continue
+		}
+
+		result, err := pm.Start(cfg.AppID)
+		if err != nil {
+			lower := strings.ToLower(err.Error())
+			if strings.Contains(lower, "already running") {
+				m.logInfof("skip auto-start for app %s because process is already running", cfg.AppID)
+				continue
+			}
+			m.logErrorf("failed to auto-start app %s: %v", cfg.AppID, err)
+			continue
+		}
+
+		for _, proc := range result.Processes {
+			started = append(started, AppProcess{
+				AppID: cfg.AppID,
+				Name:  strings.TrimSpace(proc.Name),
+				PID:   proc.PID,
+			})
+		}
+	}
+
+	for _, proc := range started {
+		m.logInfof("auto-started app=%s process=%s pid=%d", proc.AppID, proc.Name, proc.PID)
+	}
+}
+
+func (m *Manager) loadInstalledApps(store storage.Storage) ([]storage.AppConfig, error) {
+	entries, err := os.ReadDir(system.GetAppsDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []storage.AppConfig{}, nil
+		}
+		return nil, fmt.Errorf("failed to read apps directory: %w", err)
+	}
+
+	appIDs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		id := strings.TrimSpace(entry.Name())
+		if id == "" {
+			continue
+		}
+		appIDs = append(appIDs, id)
+	}
+
+	sort.Strings(appIDs)
+	configs := make([]storage.AppConfig, 0, len(appIDs))
+	for _, appID := range appIDs {
+		cfg, err := store.Load(appID)
+		if err != nil {
+			m.logErrorf("failed to load app metadata for %s: %v", appID, err)
+			continue
+		}
+		cfg.AppID = strings.TrimSpace(cfg.AppID)
+		if cfg.AppID == "" {
+			cfg.AppID = appID
+		}
+		configs = append(configs, cfg)
+	}
+
+	return configs, nil
+}
+
+func hasRunningProcess(processes []procman.Process) bool {
+	for _, proc := range processes {
+		if strings.EqualFold(strings.TrimSpace(proc.Status), "running") {
+			return true
+		}
+	}
+	return false
 }

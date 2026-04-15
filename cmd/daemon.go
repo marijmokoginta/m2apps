@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"m2apps/internal/daemon"
+	"m2apps/internal/privilege"
 	"m2apps/internal/service"
 	"m2apps/internal/ui"
 	"os"
@@ -23,9 +24,7 @@ var daemonInstallCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install daemon OS service",
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := runServiceAction("Installing service...", "Service installed", "install service", func(m service.ServiceManager) error {
-			return m.Install()
-		}); err != nil {
+		if err := runDaemonCommand("install"); err != nil {
 			os.Exit(1)
 		}
 	},
@@ -35,9 +34,7 @@ var daemonUninstallCmd = &cobra.Command{
 	Use:   "uninstall",
 	Short: "Uninstall daemon OS service",
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := runServiceAction("Uninstalling service...", "Service uninstalled", "uninstall service", func(m service.ServiceManager) error {
-			return m.Uninstall()
-		}); err != nil {
+		if err := runDaemonCommand("uninstall"); err != nil {
 			os.Exit(1)
 		}
 	},
@@ -47,9 +44,7 @@ var daemonEnableCmd = &cobra.Command{
 	Use:   "enable",
 	Short: "Enable daemon service auto-start",
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := runServiceAction("Enabling service...", "Service enabled", "enable service", func(m service.ServiceManager) error {
-			return m.Enable()
-		}); err != nil {
+		if err := runDaemonCommand("enable"); err != nil {
 			os.Exit(1)
 		}
 	},
@@ -59,9 +54,7 @@ var daemonDisableCmd = &cobra.Command{
 	Use:   "disable",
 	Short: "Disable daemon service auto-start",
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := runServiceAction("Disabling service...", "Service disabled", "disable service", func(m service.ServiceManager) error {
-			return m.Disable()
-		}); err != nil {
+		if err := runDaemonCommand("disable"); err != nil {
 			os.Exit(1)
 		}
 	},
@@ -71,9 +64,7 @@ var daemonStartCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start daemon service",
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := runServiceAction("Starting service...", "Service started", "start service", func(m service.ServiceManager) error {
-			return m.Start()
-		}); err != nil {
+		if err := runDaemonCommand("start"); err != nil {
 			os.Exit(1)
 		}
 	},
@@ -83,9 +74,7 @@ var daemonStopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop daemon service",
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := runServiceAction("Stopping service...", "Service stopped", "stop service", func(m service.ServiceManager) error {
-			return m.Stop()
-		}); err != nil {
+		if err := runDaemonCommand("stop"); err != nil {
 			os.Exit(1)
 		}
 	},
@@ -108,6 +97,7 @@ var daemonRunCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		manager, err := daemon.NewManager()
 		if err != nil {
+			_ = daemon.AppendRuntimeLog("ERROR", fmt.Sprintf("failed to initialize daemon manager: %v", err))
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			os.Exit(1)
 		}
@@ -123,6 +113,7 @@ var daemonRunCmd = &cobra.Command{
 		}()
 
 		if err := manager.RunForeground(ctx); err != nil {
+			_ = daemon.AppendRuntimeLog("ERROR", fmt.Sprintf("daemon runtime error: %v", err))
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			os.Exit(1)
 		}
@@ -177,6 +168,17 @@ func runDaemonStatus() error {
 }
 
 func runDaemonCommand(action string) error {
+	if daemonActionNeedsSupervisor(action) {
+		launched, err := triggerDaemonSupervisorPopup(action)
+		if err != nil {
+			printServiceError(action, err)
+			return err
+		}
+		if launched {
+			return nil
+		}
+	}
+
 	switch strings.ToLower(strings.TrimSpace(action)) {
 	case "install":
 		return runServiceAction("Installing service...", "Service installed", "install service", func(m service.ServiceManager) error {
@@ -207,4 +209,26 @@ func runDaemonCommand(action string) error {
 	default:
 		return fmt.Errorf("unsupported daemon action %q", action)
 	}
+}
+
+func daemonActionNeedsSupervisor(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "install", "uninstall", "enable", "disable", "start", "stop":
+		return true
+	default:
+		return false
+	}
+}
+
+func triggerDaemonSupervisorPopup(action string) (bool, error) {
+	if privilege.IsElevated() {
+		return false, nil
+	}
+
+	fmt.Println(ui.Info("[INFO] Supervisor permission required. Opening OS authentication popup..."))
+	if err := privilege.RelaunchElevated([]string{"daemon", strings.TrimSpace(action)}); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }

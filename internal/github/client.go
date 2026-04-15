@@ -10,6 +10,7 @@ import (
 )
 
 type Client interface {
+	GetLatestRelease(owner, repo string) (*Release, error)
 	GetReleaseByTag(owner, repo, tag string) (*Release, error)
 	GetAllReleases(owner, repo string) ([]Release, error)
 }
@@ -31,6 +32,11 @@ func NewClient(token string) Client {
 func (c *APIClient) GetReleaseByTag(owner, repo, tag string) (*Release, error) {
 	escapedTag := url.PathEscape(strings.TrimSpace(tag))
 	path := fmt.Sprintf("/repos/%s/%s/releases/tags/%s", owner, repo, escapedTag)
+	return c.fetchRelease(path)
+}
+
+func (c *APIClient) GetLatestRelease(owner, repo string) (*Release, error) {
+	path := fmt.Sprintf("/repos/%s/%s/releases/latest", owner, repo)
 	return c.fetchRelease(path)
 }
 

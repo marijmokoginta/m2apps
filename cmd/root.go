@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"m2apps/internal/selfupdate"
 	"m2apps/internal/storage"
 	"m2apps/internal/system"
 	"m2apps/internal/ui"
@@ -16,7 +17,7 @@ import (
 )
 
 const colorReset = "\033[0m"
-const appVersion = "v1.0.6"
+const appVersion = "v1.1.0"
 
 func rgb(r, g, b int) string {
 	return fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
@@ -152,6 +153,13 @@ func init() {
 }
 
 func runInteractiveRoot(cmd *cobra.Command) error {
+	shouldExit, err := runSelfUpdateFlow()
+	if err != nil {
+		fmt.Println(ui.Warning(fmt.Sprintf("[WARN] Self-update check skipped: %v", err)))
+	} else if shouldExit {
+		return nil
+	}
+
 	for {
 		action, err := runInteractiveMenu(
 			"Main Menu",
@@ -213,6 +221,56 @@ func runInteractiveRoot(cmd *cobra.Command) error {
 		case "exit":
 			return nil
 		}
+	}
+}
+
+func runSelfUpdateFlow() (bool, error) {
+	check, err := selfupdate.Check(appVersion)
+	if err != nil {
+		return false, err
+	}
+	if !check.HasUpdate || check.Skipped {
+		return false, nil
+	}
+
+	title := fmt.Sprintf("New version available: %s", check.LatestVersion)
+	action, err := runInteractiveMenu(
+		title,
+		[]ui.MenuItem{
+			{Title: "Update now", Action: "update_now"},
+			{Title: "Skip for now", Action: "skip_once"},
+			{Title: "Skip until next version", Action: "skip_until"},
+		},
+		nil,
+	)
+	if err != nil {
+		if errors.Is(err, ui.ErrMenuCancelled) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	switch action {
+	case "update_now":
+		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Updating m2apps from %s to %s...", check.CurrentVersion, check.LatestVersion)))
+		if err := selfupdate.Update(appVersion); err != nil {
+			if errors.Is(err, selfupdate.ErrRestartScheduled) {
+				fmt.Println(ui.Success("[OK] Update applied. Restarting m2apps..."))
+				return true, nil
+			}
+			return false, err
+		}
+		return false, nil
+	case "skip_once":
+		return false, nil
+	case "skip_until":
+		if err := selfupdate.SaveSkippedVersion(check.LatestVersion); err != nil {
+			return false, err
+		}
+		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Skipped until version %s", check.LatestVersion)))
+		return false, nil
+	default:
+		return false, nil
 	}
 }
 

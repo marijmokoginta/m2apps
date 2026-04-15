@@ -1,6 +1,8 @@
 param(
     [string]$RepoOwner = "marijmokoginta",
-    [string]$RepoName = "m2apps"
+    [string]$RepoName = "m2apps",
+    [switch]$UserScope,
+    [switch]$Elevated
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,6 +46,27 @@ function Install-ToTarget($sourcePath, $targetDir, $scopeName) {
     return $targetFile
 }
 
+function Start-ElevatedInstaller($repoOwner, $repoName, $userScopeEnabled) {
+    if (-not $PSCommandPath) {
+        Fail "Unable to resolve installer script path for elevation."
+    }
+
+    $argList = @(
+        "-ExecutionPolicy", "Bypass",
+        "-File", "`"$PSCommandPath`"",
+        "-RepoOwner", "`"$repoOwner`"",
+        "-RepoName", "`"$repoName`"",
+        "-Elevated"
+    )
+
+    if ($userScopeEnabled) {
+        $argList += "-UserScope"
+    }
+
+    $proc = Start-Process -FilePath "powershell" -ArgumentList $argList -Verb RunAs -Wait -PassThru
+    return $proc.ExitCode
+}
+
 try {
     $archRaw = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
     switch ($archRaw) {
@@ -84,22 +107,27 @@ try {
         Fail "m2apps.exe not found after archive extraction"
     }
 
-    $isAdmin = Test-IsAdministrator
-    if ($isAdmin) {
-        try {
-            Info "Administrator session detected. Installing to $machineTargetDir (machine scope)..."
-            $installedPath = Install-ToTarget $tempFile $machineTargetDir "Machine"
-            Info "Machine-level installation completed."
+    if (-not $UserScope) {
+        $isAdmin = Test-IsAdministrator
+        if (-not $isAdmin) {
+            if ($Elevated) {
+                Fail "Administrator privileges are required for machine-level installation."
+            }
+
+            Info "Supervisor permission required. Opening UAC popup..."
+            $exitCode = Start-ElevatedInstaller $RepoOwner $RepoName $false
+            if ($exitCode -ne 0) {
+                Fail "Elevated installer failed with exit code $exitCode"
+            }
+            exit 0
         }
-        catch {
-            Info "Machine-level install failed: $($_.Exception.Message)"
-            Info "Falling back to user-level install at $userTargetDir..."
-            $installedPath = Install-ToTarget $tempFile $userTargetDir "User"
-            Info "User-level installation completed."
-        }
+
+        Info "Installing to $machineTargetDir (machine scope)..."
+        $installedPath = Install-ToTarget $tempFile $machineTargetDir "Machine"
+        Info "Machine-level installation completed."
     }
     else {
-        Info "Non-administrator session detected. Installing to $userTargetDir (user scope)..."
+        Info "Installing to $userTargetDir (user scope)..."
         $installedPath = Install-ToTarget $tempFile $userTargetDir "User"
         Info "User-level installation completed."
     }
