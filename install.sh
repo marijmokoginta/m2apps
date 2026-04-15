@@ -5,6 +5,7 @@ REPO_OWNER="${M2APPS_REPO_OWNER:-marijmokoginta}"
 REPO_NAME="${M2APPS_REPO_NAME:-m2apps}"
 TARGET="/usr/local/bin/m2apps"
 API_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"
+SCRIPT_PATH=""
 
 cleanup() {
   if [[ -n "${TMP_DIR:-}" && -d "${TMP_DIR}" ]]; then
@@ -20,6 +21,36 @@ log() {
 fail() {
   printf '[ERROR] %s\n' "$1" >&2
   exit 1
+}
+
+quote_sh() {
+  printf "%q" "$1"
+}
+
+escape_applescript() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+resolve_script_path() {
+  local source_path
+  source_path="${BASH_SOURCE[0]:-$0}"
+  if [[ -z "${source_path}" ]]; then
+    fail "unable to resolve installer script path"
+  fi
+
+  if [[ "${source_path}" != /* ]]; then
+    source_path="$(pwd)/${source_path}"
+  fi
+
+  if command -v realpath >/dev/null 2>&1; then
+    source_path="$(realpath "${source_path}")"
+  fi
+
+  if [[ ! -f "${source_path}" ]]; then
+    fail "installer script not found at ${source_path}"
+  fi
+
+  SCRIPT_PATH="${source_path}"
 }
 
 resolve_os() {
@@ -93,10 +124,6 @@ ensure_supervisor_popup_if_needed() {
   local os_name="$1"
   shift
 
-  if [[ "${os_name}" != "linux" ]]; then
-    return
-  fi
-
   if [[ -w "$(dirname "${TARGET}")" || "${EUID:-$(id -u)}" -eq 0 ]]; then
     return
   fi
@@ -105,16 +132,39 @@ ensure_supervisor_popup_if_needed() {
     fail "administrator privileges are required to install into ${TARGET}"
   fi
 
-  if ! command -v pkexec >/dev/null 2>&1; then
-    fail "pkexec is required for Linux privilege popup"
-  fi
+  case "${os_name}" in
+    linux)
+      if ! command -v pkexec >/dev/null 2>&1; then
+        fail "pkexec is required for Linux privilege popup"
+      fi
 
-  log "Supervisor permission required. Opening OS authentication popup..."
-  exec pkexec env \
-    "M2APPS_ELEVATED=1" \
-    "M2APPS_REPO_OWNER=${REPO_OWNER}" \
-    "M2APPS_REPO_NAME=${REPO_NAME}" \
-    bash "$0" "$@"
+      log "Supervisor permission required. Opening OS authentication popup..."
+      exec pkexec env \
+        "M2APPS_ELEVATED=1" \
+        "M2APPS_REPO_OWNER=${REPO_OWNER}" \
+        "M2APPS_REPO_NAME=${REPO_NAME}" \
+        bash "${SCRIPT_PATH}" "$@"
+      ;;
+    darwin)
+      if ! command -v osascript >/dev/null 2>&1; then
+        fail "osascript is required for macOS privilege popup"
+      fi
+
+      log "Supervisor permission required. Opening OS authentication popup..."
+      local cmd
+      cmd="M2APPS_ELEVATED=1 M2APPS_REPO_OWNER=$(quote_sh "${REPO_OWNER}") M2APPS_REPO_NAME=$(quote_sh "${REPO_NAME}") /bin/bash $(quote_sh "${SCRIPT_PATH}")"
+      for arg in "$@"; do
+        cmd+=" $(quote_sh "${arg}")"
+      done
+
+      local escaped_cmd
+      escaped_cmd="$(escape_applescript "${cmd}")"
+      if ! osascript -e "do shell script \"${escaped_cmd}\" with administrator privileges"; then
+        fail "administrator authentication was cancelled or failed"
+      fi
+      exit 0
+      ;;
+  esac
 }
 
 validate_installation() {
@@ -129,6 +179,7 @@ validate_installation() {
 main() {
   local os arch asset_name release_json download_url archive_path extracted_binary
 
+  resolve_script_path
   os="$(resolve_os)"
   arch="$(resolve_arch)"
   asset_name="m2apps-${os}-${arch}.tar.gz"

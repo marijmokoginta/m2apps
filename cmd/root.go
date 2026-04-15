@@ -275,8 +275,12 @@ func runSelfUpdateFlow() (bool, error) {
 }
 
 type installedApp struct {
-	ID   string
-	Name string
+	ID          string
+	Name        string
+	Version     string
+	Channel     string
+	Preset      string
+	InstallPath string
 }
 
 func runInteractiveUpdateFlow() error {
@@ -515,8 +519,12 @@ func loadInstalledApps() ([]installedApp, error) {
 		cfg, err := store.Load(appID)
 		if err != nil {
 			apps = append(apps, installedApp{
-				ID:   appID,
-				Name: appID,
+				ID:          appID,
+				Name:        appID,
+				Version:     "-",
+				Channel:     "-",
+				Preset:      "-",
+				InstallPath: "-",
 			})
 			continue
 		}
@@ -527,8 +535,12 @@ func loadInstalledApps() ([]installedApp, error) {
 		}
 
 		apps = append(apps, installedApp{
-			ID:   appID,
-			Name: name,
+			ID:          appID,
+			Name:        name,
+			Version:     strings.TrimSpace(cfg.Version),
+			Channel:     strings.TrimSpace(cfg.Channel),
+			Preset:      strings.TrimSpace(cfg.Preset),
+			InstallPath: strings.TrimSpace(cfg.InstallPath),
 		})
 	}
 
