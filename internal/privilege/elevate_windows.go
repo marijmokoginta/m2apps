@@ -22,7 +22,7 @@ func isElevated() bool {
 	}
 
 	// Legacy fallback for older environments.
-	cmd := system.NewCommand("net", "session")
+	cmd = system.NewCommand("net", "session")
 	return cmd.Run() == nil
 }
 
