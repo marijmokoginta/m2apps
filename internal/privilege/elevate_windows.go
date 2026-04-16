@@ -11,8 +11,28 @@ import (
 )
 
 func isElevated() bool {
+	if isElevatedViaPowerShell() {
+		return true
+	}
+
+	// Common admin-required command on Windows.
+	cmd := system.NewCommand("fltmc")
+	if cmd.Run() == nil {
+		return true
+	}
+
+	// Legacy fallback for older environments.
 	cmd := system.NewCommand("net", "session")
 	return cmd.Run() == nil
+}
+
+func isElevatedViaPowerShell() bool {
+	script := "$id=[Security.Principal.WindowsIdentity]::GetCurrent();$p=New-Object Security.Principal.WindowsPrincipal($id);if($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){Write-Output 'true'}else{Write-Output 'false'}"
+	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(string(out)), "true")
 }
 
 func relaunchElevated(args []string) error {

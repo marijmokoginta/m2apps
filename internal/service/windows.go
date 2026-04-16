@@ -2,7 +2,7 @@ package service
 
 import (
 	"fmt"
-	"m2apps/internal/system"
+	"m2apps/internal/privilege"
 	"strings"
 )
 
@@ -137,8 +137,7 @@ func requireAdmin() error {
 }
 
 func isAdmin() bool {
-	cmd := system.NewCommand("net", "session")
-	return cmd.Run() == nil
+	return privilege.IsElevated()
 }
 
 func runSC(args ...string) error {

@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"m2apps/internal/daemon"
@@ -209,7 +211,15 @@ func runDaemonStatus() error {
 }
 
 func runDaemonCommand(action string) error {
-	if daemonActionNeedsSupervisor(action) {
+	return runDaemonCommandInternal(action, true)
+}
+
+func runDaemonCommandWithoutSupervisor(action string) error {
+	return runDaemonCommandInternal(action, false)
+}
+
+func runDaemonCommandInternal(action string, withSupervisor bool) error {
+	if withSupervisor && daemonActionNeedsSupervisor(action) {
 		launched, err := triggerDaemonSupervisorPopup(action)
 		if err != nil {
 			if strings.EqualFold(strings.TrimSpace(action), "start") {
@@ -353,11 +363,86 @@ func triggerDaemonSupervisorPopup(action string) (bool, error) {
 	}
 
 	fmt.Println(ui.Info("[INFO] Supervisor permission required. Opening OS authentication popup..."))
-	if err := privilege.RelaunchElevated([]string{"daemon", strings.TrimSpace(action)}); err != nil {
+	args := []string{"daemon", strings.TrimSpace(action)}
+	statusFile := ""
+	if runtime.GOOS == "windows" {
+		statusFile = filepath.Join(os.TempDir(), fmt.Sprintf("m2apps_daemon_action_status_%d.json", time.Now().UnixNano()))
+		_ = os.Remove(statusFile)
+		args = []string{
+			"internal", "daemon-action",
+			"--action", strings.TrimSpace(action),
+			"--status-file", statusFile,
+		}
+	}
+
+	if err := privilege.RelaunchElevated(args); err != nil {
+		_ = os.Remove(statusFile)
 		return false, err
 	}
 
+	if runtime.GOOS == "windows" {
+		status, err := waitDaemonActionStatus(statusFile, 75*time.Second)
+		_ = os.Remove(statusFile)
+		if err != nil {
+			return false, err
+		}
+		if !status.Success {
+			msg := strings.TrimSpace(status.Message)
+			if msg == "" {
+				msg = "elevated daemon action failed"
+			}
+			return false, errors.New(msg)
+		}
+	}
+
 	return true, nil
+}
+
+type daemonActionStatus struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+func writeDaemonActionStatus(path string, status daemonActionStatus) error {
+	target := strings.TrimSpace(path)
+	if target == "" {
+		return nil
+	}
+	raw, err := json.Marshal(status)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(target, raw, 0o600)
+}
+
+func waitDaemonActionStatus(path string, timeout time.Duration) (daemonActionStatus, error) {
+	target := strings.TrimSpace(path)
+	if target == "" {
+		return daemonActionStatus{}, fmt.Errorf("daemon action status file path is required")
+	}
+	if timeout <= 0 {
+		timeout = 45 * time.Second
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		raw, err := os.ReadFile(target)
+		if err != nil {
+			if os.IsNotExist(err) {
+				time.Sleep(180 * time.Millisecond)
+				continue
+			}
+			return daemonActionStatus{}, fmt.Errorf("failed to read daemon action status: %w", err)
+		}
+
+		var status daemonActionStatus
+		if err := json.Unmarshal(raw, &status); err != nil {
+			return daemonActionStatus{}, fmt.Errorf("invalid daemon action status: %w", err)
+		}
+		return status, nil
+	}
+
+	return daemonActionStatus{}, fmt.Errorf("timed out waiting for elevated daemon action result")
 }
 
 type localAPIState struct {
