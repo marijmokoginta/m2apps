@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -99,18 +100,43 @@ var daemonStatusCmd = &cobra.Command{
 
 var daemonRunCmd = &cobra.Command{
 	Use:    "run",
-	Short:  "Run daemon process (internal)",
-	Hidden: true,
+	Short:  "Run daemon process",
+	Hidden: false,
 	Run: func(cmd *cobra.Command, args []string) {
+		printBanner()
+		fmt.Printf("%s %s\n\n", ui.Info("[INFO] Version:"), appVersion)
+
 		manager, err := daemon.NewManager()
 		if err != nil {
-			_ = daemon.AppendRuntimeLog("ERROR", fmt.Sprintf("failed to initialize daemon manager: %v", err))
+			_ = daemon.AppendServiceLog("ERROR", fmt.Sprintf("failed to initialize daemon manager: %v", err))
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			os.Exit(1)
 		}
 
+		if daemonRunDetach {
+			if err := manager.Start(); err != nil {
+				_ = daemon.AppendServiceLog("ERROR", fmt.Sprintf("daemon detach start failed: %v", err))
+				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+				printManualDaemonRunFallback()
+				os.Exit(1)
+			}
+			fmt.Println(ui.Success("[OK] Daemon started in background mode"))
+			fmt.Printf("%s %s\n", ui.Info("[INFO] Service log:"), daemonServiceLogPath())
+			fmt.Printf("%s %s\n", ui.Info("[INFO] Access log:"), daemonAccessLogPath())
+			return
+		}
+
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+
+		if !daemonRunNoLog {
+			fmt.Printf("%s %s\n", ui.Info("[INFO] Streaming daemon service logs from:"), daemonServiceLogPath())
+			fmt.Printf("%s %s\n", ui.Info("[INFO] Streaming local API access logs from:"), daemonAccessLogPath())
+			fmt.Println(ui.Info("[INFO] Showing only current runtime logs (history excluded)."))
+			fmt.Println(ui.Info("[INFO] Press Ctrl+C to stop foreground daemon run."))
+			go streamDaemonLogs(ctx, daemonServiceLogPath(), "SERVICE", true)
+			go streamDaemonLogs(ctx, daemonAccessLogPath(), "API", true)
+		}
 
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -120,12 +146,17 @@ var daemonRunCmd = &cobra.Command{
 		}()
 
 		if err := manager.RunForeground(ctx); err != nil {
-			_ = daemon.AppendRuntimeLog("ERROR", fmt.Sprintf("daemon runtime error: %v", err))
+			_ = daemon.AppendServiceLog("ERROR", fmt.Sprintf("daemon runtime error: %v", err))
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			os.Exit(1)
 		}
 	},
 }
+
+var (
+	daemonRunDetach bool
+	daemonRunNoLog  bool
+)
 
 func init() {
 	daemonCmd.AddCommand(daemonInstallCmd)
@@ -136,6 +167,8 @@ func init() {
 	daemonCmd.AddCommand(daemonStopCmd)
 	daemonCmd.AddCommand(daemonStatusCmd)
 	daemonCmd.AddCommand(daemonRunCmd)
+	daemonRunCmd.Flags().BoolVarP(&daemonRunDetach, "detach", "d", false, "Run daemon in background and return immediately")
+	daemonRunCmd.Flags().BoolVar(&daemonRunNoLog, "no-log", false, "Run in foreground without streaming daemon log output")
 	rootCmd.AddCommand(daemonCmd)
 }
 
@@ -179,6 +212,15 @@ func runDaemonCommand(action string) error {
 	if daemonActionNeedsSupervisor(action) {
 		launched, err := triggerDaemonSupervisorPopup(action)
 		if err != nil {
+			if strings.EqualFold(strings.TrimSpace(action), "start") {
+				fmt.Println(ui.Warning("[WARN] Supervisor start failed, trying process fallback..."))
+				if fallbackErr := startDaemonProcessFallback(); fallbackErr == nil {
+					fmt.Println(ui.Success("[OK] Daemon started using process fallback mode"))
+					printManualDaemonRunFallback()
+					return nil
+				}
+				printManualDaemonRunFallback()
+			}
 			printServiceError(action, err)
 			return err
 		}
@@ -205,9 +247,7 @@ func runDaemonCommand(action string) error {
 			return m.Disable()
 		})
 	case "start":
-		return runServiceAction("Starting service...", "Service started", "start service", func(m service.ServiceManager) error {
-			return m.Start()
-		})
+		return runDaemonStart()
 	case "stop":
 		return runServiceAction("Stopping service...", "Service stopped", "stop service", func(m service.ServiceManager) error {
 			return m.Stop()
@@ -221,6 +261,29 @@ func runDaemonCommand(action string) error {
 	default:
 		return fmt.Errorf("unsupported daemon action %q", action)
 	}
+}
+
+func runDaemonStart() error {
+	manager := service.NewServiceManager()
+
+	fmt.Println(ui.Info("[INFO] Starting service..."))
+	if err := manager.Start(); err != nil {
+		if runtime.GOOS == "windows" {
+			fmt.Println(ui.Warning("[WARN] Failed to start Windows service, switching to process fallback..."))
+			if fallbackErr := startDaemonProcessFallback(); fallbackErr == nil {
+				fmt.Println(ui.Success("[OK] Daemon started using process fallback mode"))
+				printManualDaemonRunFallback()
+				return nil
+			}
+		}
+
+		printServiceError("start service", err)
+		printManualDaemonRunFallback()
+		return err
+	}
+
+	fmt.Println(ui.Success("[OK] Service started"))
+	return nil
 }
 
 func daemonActionNeedsSupervisor(action string) bool {
@@ -368,4 +431,91 @@ func readDaemonPID() int {
 		return 0
 	}
 	return pid
+}
+
+func startDaemonProcessFallback() error {
+	manager, err := daemon.NewManager()
+	if err != nil {
+		return err
+	}
+	return manager.Start()
+}
+
+func printManualDaemonRunFallback() {
+	fmt.Println(ui.Info("[INFO] Manual fallback: run `m2apps daemon run` (foreground with logs)."))
+	fmt.Println(ui.Info("[INFO] Background mode: run `m2apps daemon run --detach`."))
+}
+
+func daemonServiceLogPath() string {
+	return daemon.ServiceLogPath()
+}
+
+func daemonAccessLogPath() string {
+	return daemon.AccessLogPath()
+}
+
+func streamDaemonLogs(ctx context.Context, path string, source string, startAtEOF bool) {
+	var offset int64
+	if startAtEOF {
+		if info, err := os.Stat(path); err == nil {
+			offset = info.Size()
+		}
+	}
+	ticker := time.NewTicker(350 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			info, err := os.Stat(path)
+			if err != nil {
+				continue
+			}
+			size := info.Size()
+			if size < offset {
+				offset = 0
+			}
+			if size == offset {
+				continue
+			}
+
+			file, err := os.Open(path)
+			if err != nil {
+				continue
+			}
+
+			_, _ = file.Seek(offset, io.SeekStart)
+			data, _ := io.ReadAll(file)
+			_ = file.Close()
+
+			offset += int64(len(data))
+			for _, line := range strings.Split(string(data), "\n") {
+				text := strings.TrimSpace(line)
+				if text == "" {
+					continue
+				}
+				printDaemonLogLine(source, text)
+			}
+		}
+	}
+}
+
+func printDaemonLogLine(source, line string) {
+	label := strings.ToUpper(strings.TrimSpace(source))
+	if label == "" {
+		label = "LOG"
+	}
+	prefix := fmt.Sprintf("[%s]", label)
+
+	lower := strings.ToLower(line)
+	switch {
+	case strings.Contains(line, "[ERROR]") || strings.Contains(line, "[FAIL]") || strings.Contains(lower, " failed"):
+		fmt.Printf("%s %s\n", ui.Error(prefix), ui.Error(line))
+	case strings.Contains(line, "[WARN]") || strings.Contains(lower, " warning"):
+		fmt.Printf("%s %s\n", ui.Warning(prefix), ui.Warning(line))
+	default:
+		fmt.Printf("%s %s\n", ui.Info(prefix), line)
+	}
 }

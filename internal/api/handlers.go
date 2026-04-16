@@ -8,49 +8,55 @@ import (
 	"m2apps/internal/updater"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type Handler struct {
-	Store    storage.Storage
-	Progress *progress.Manager
+	Store     storage.Storage
+	Progress  *progress.Manager
+	AccessLog func(string)
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
+	recorder := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+	defer h.logAccess(r, recorder.statusCode, time.Since(startedAt))
+
 	if r.Method == http.MethodGet && strings.TrimSpace(r.URL.Path) == "/health" {
-		h.handleHealth(w)
+		h.handleHealth(recorder)
 		return
 	}
 	if r.Method == http.MethodGet && strings.TrimSpace(r.URL.Path) == "/ping" {
-		h.handlePing(w)
+		h.handlePing(recorder)
 		return
 	}
 
 	parts := splitPath(r.URL.Path)
 	if len(parts) < 3 || parts[0] != "apps" {
-		writeErrorJSON(w, http.StatusNotFound, "endpoint not found")
+		writeErrorJSON(recorder, http.StatusNotFound, "endpoint not found")
 		return
 	}
 
 	appID := parts[1]
 	cfg, err := validateBearerToken(r, appID, h.Store)
 	if err != nil {
-		writeErrorJSON(w, http.StatusUnauthorized, err.Error())
+		writeErrorJSON(recorder, http.StatusUnauthorized, err.Error())
 		return
 	}
 
 	switch {
 	case len(parts) == 4 && parts[2] == "update" && parts[3] == "check" && r.Method == http.MethodGet:
-		h.handleCheckUpdate(w, appID)
+		h.handleCheckUpdate(recorder, appID)
 	case len(parts) == 3 && parts[2] == "update" && r.Method == http.MethodPost:
-		h.handleStartUpdate(w, appID)
+		h.handleStartUpdate(recorder, appID)
 	case len(parts) == 4 && parts[2] == "update" && parts[3] == "status" && r.Method == http.MethodGet:
-		h.handleUpdateStatus(w, appID)
+		h.handleUpdateStatus(recorder, appID)
 	case len(parts) == 3 && parts[2] == "channel" && r.Method == http.MethodPost:
-		h.handleSwitchChannel(w, appID, cfg, r)
+		h.handleSwitchChannel(recorder, appID, cfg, r)
 	case len(parts) == 4 && parts[2] == "auth" && parts[3] == "update" && r.Method == http.MethodPost:
-		h.handleUpdateToken(w, appID, cfg, r)
+		h.handleUpdateToken(recorder, appID, cfg, r)
 	default:
-		writeErrorJSON(w, http.StatusNotFound, "endpoint not found")
+		writeErrorJSON(recorder, http.StatusNotFound, "endpoint not found")
 	}
 }
 
@@ -159,6 +165,31 @@ func (h *Handler) handlePing(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"pong": true,
 	})
+}
+
+func (h *Handler) logAccess(r *http.Request, statusCode int, duration time.Duration) {
+	if h.AccessLog == nil {
+		return
+	}
+	method := strings.ToUpper(strings.TrimSpace(r.Method))
+	if method == "" {
+		method = "UNKNOWN"
+	}
+	path := strings.TrimSpace(r.URL.Path)
+	if path == "" {
+		path = "/"
+	}
+	h.AccessLog(fmt.Sprintf("api %s %s -> %d (%s)", method, path, statusCode, duration.Round(time.Millisecond)))
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.statusCode = code
+	r.ResponseWriter.WriteHeader(code)
 }
 
 func splitPath(path string) []string {

@@ -14,10 +14,11 @@ type Server struct {
 	httpServer *http.Server
 }
 
-func NewServer(store storage.Storage, progressManager *progress.Manager) *Server {
+func NewServer(store storage.Storage, progressManager *progress.Manager, accessLog func(string)) *Server {
 	handler := &Handler{
-		Store:    store,
-		Progress: progressManager,
+		Store:     store,
+		Progress:  progressManager,
+		AccessLog: accessLog,
 	}
 
 	return &Server{

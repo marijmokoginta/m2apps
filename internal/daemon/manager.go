@@ -110,7 +110,7 @@ func (m *Manager) Start() error {
 	}
 
 	m.logErrorf("daemon start timed out waiting for runtime files")
-	return fmt.Errorf("daemon start timed out (check log: %s)", daemonLogPath())
+	return fmt.Errorf("daemon start timed out (check log: %s)", ServiceLogPath())
 }
 
 func (m *Manager) Stop() error {
@@ -176,7 +176,9 @@ func (m *Manager) RunForeground(ctx context.Context) error {
 	m.syncAppAPIEnv(store, port)
 	m.autoStartApps(store)
 
-	server := api.NewServer(store, progress.DefaultManager())
+	server := api.NewServer(store, progress.DefaultManager(), func(message string) {
+		_ = AppendAccessLog(message)
+	})
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -400,9 +402,9 @@ func (m *Manager) openDaemonLogFile() (*os.File, error) {
 	if err := os.MkdirAll(system.GetLogDir(), 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create daemon log directory: %w", err)
 	}
-	logFile, err := os.OpenFile(daemonLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	logFile, err := os.OpenFile(ServiceLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open daemon log file: %w", err)
+		return nil, fmt.Errorf("failed to open daemon service log file: %w", err)
 	}
 	return logFile, nil
 }
@@ -425,7 +427,7 @@ func (m *Manager) logWithLevel(level, format string, args ...any) {
 		return
 	}
 
-	_ = AppendRuntimeLog(prefix, message)
+	_ = AppendServiceLog(prefix, message)
 }
 
 func (m *Manager) autoStartApps(store storage.Storage) {
