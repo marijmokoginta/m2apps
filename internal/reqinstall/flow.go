@@ -56,6 +56,19 @@ func ResolveAndInstall(mode string, reqs []requirements.Requirement, initial []r
 
 		result := exec.Execute(candidate)
 		if result.Success {
+			postCheck := requirements.Run([]requirements.Requirement{{
+				Type:    candidate.ToolType,
+				Version: candidate.RequiredVersion,
+			}})
+			if len(postCheck) == 0 || !postCheck[0].Success {
+				detail := "requirement is still not satisfied"
+				if len(postCheck) > 0 && strings.TrimSpace(postCheck[0].Message) != "" {
+					detail = strings.TrimSpace(postCheck[0].Message)
+				}
+				fmt.Println(ui.Error(fmt.Sprintf("[FAIL] %s (%s)", candidate.Name, detail)))
+				continue
+			}
+
 			fmt.Println(ui.Success(fmt.Sprintf("[OK] %s installed", candidate.Name)))
 			if runtime.GOOS == "windows" {
 				fmt.Println(ui.Info("[INFO] Windows detected: if installer updated PATH/env, restart terminal so new commands are available."))

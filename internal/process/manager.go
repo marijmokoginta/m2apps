@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Manager struct {
@@ -361,6 +362,11 @@ func stopByPID(pid int) error {
 	}
 
 	pidValue := strconv.Itoa(pid)
+	beforeStartTime := ""
+	if runtime.GOOS == "linux" {
+		beforeStartTime = linuxProcStartTime(pid)
+	}
+
 	if runtime.GOOS == "windows" {
 		out, err := system.CombinedOutput("taskkill", "/PID", pidValue, "/T", "/F")
 		if err != nil {
@@ -376,8 +382,18 @@ func stopByPID(pid int) error {
 	if err != nil && isProcessAlive(pid) {
 		out, err = system.CombinedOutput("kill", "-KILL", pidValue)
 		if err != nil && isProcessAlive(pid) {
-			return fmt.Errorf("failed to stop pid %d: %s", pid, strings.TrimSpace(string(out)))
+			return fmt.Errorf("failed to stop pid %d: %s", pid, formatStopError(out, err))
 		}
+	}
+	waitUntilStopped(pid, 2*time.Second)
+	if isProcessAlive(pid) {
+		if runtime.GOOS == "linux" && beforeStartTime != "" {
+			afterStartTime := linuxProcStartTime(pid)
+			if afterStartTime == "" || afterStartTime != beforeStartTime {
+				return nil
+			}
+		}
+		return fmt.Errorf("failed to stop pid %d: process is still running (possible permission issue or auto-restart)", pid)
 	}
 
 	return nil
@@ -403,7 +419,104 @@ func isProcessAlive(pid int) bool {
 	}
 
 	_, err := system.CombinedOutput("kill", "-0", pidValue)
-	return err == nil
+	if err == nil {
+		if runtime.GOOS == "linux" && isLinuxZombie(pid) {
+			return false
+		}
+		return true
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(lower, "operation not permitted")
+}
+
+func waitUntilStopped(pid int, timeout time.Duration) {
+	if pid <= 0 {
+		return
+	}
+	if timeout <= 0 {
+		timeout = 1 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !isProcessAlive(pid) {
+			return
+		}
+		time.Sleep(120 * time.Millisecond)
+	}
+}
+
+func formatStopError(output []byte, cmdErr error) string {
+	out := strings.TrimSpace(string(output))
+	errText := ""
+	if cmdErr != nil {
+		errText = strings.TrimSpace(cmdErr.Error())
+	}
+
+	switch {
+	case out != "" && errText != "":
+		return out + " (" + errText + ")"
+	case out != "":
+		return out
+	case errText != "":
+		return errText
+	default:
+		return "unknown stop error"
+	}
+}
+
+func isLinuxZombie(pid int) bool {
+	state := linuxProcState(pid)
+	return state == "Z"
+}
+
+func linuxProcStartTime(pid int) string {
+	fields, ok := readLinuxProcStatFields(pid)
+	if !ok || len(fields) < 22 {
+		return ""
+	}
+	return fields[21]
+}
+
+func linuxProcState(pid int) string {
+	fields, ok := readLinuxProcStatFields(pid)
+	if !ok || len(fields) < 3 {
+		return ""
+	}
+	return fields[2]
+}
+
+func readLinuxProcStatFields(pid int) ([]string, bool) {
+	if pid <= 0 {
+		return nil, false
+	}
+
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return nil, false
+	}
+
+	raw := strings.TrimSpace(string(data))
+	if raw == "" {
+		return nil, false
+	}
+
+	closeIdx := strings.LastIndex(raw, ")")
+	firstSpace := strings.Index(raw, " ")
+	if firstSpace <= 0 || closeIdx <= firstSpace || closeIdx+2 >= len(raw) {
+		return nil, false
+	}
+
+	pidField := strings.TrimSpace(raw[:firstSpace])
+	commField := strings.TrimSpace(raw[firstSpace+1 : closeIdx+1])
+	suffix := strings.TrimSpace(raw[closeIdx+2:])
+	if pidField == "" || commField == "" || suffix == "" {
+		return nil, false
+	}
+
+	fields := []string{pidField, commField}
+	fields = append(fields, strings.Fields(suffix)...)
+	return fields, true
 }
 
 func (m *Manager) resolveRuntimePort(preset string, existing []Process) int {

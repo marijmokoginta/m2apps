@@ -121,22 +121,27 @@ func buildLinuxCommands(tool string, _ string) []string {
 	case "php":
 		return []string{
 			"if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y php-cli; elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y php-cli; elif command -v yum >/dev/null 2>&1; then sudo yum install -y php-cli; else exit 127; fi",
+			"if command -v curl >/dev/null 2>&1; then curl -fsSL https://www.php.net/downloads.php -o /tmp/m2apps_php_download.html && echo '[INFO] Download reference saved to /tmp/m2apps_php_download.html'; else exit 127; fi",
 		}
 	case "node":
 		return []string{
 			"if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y nodejs npm; elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y nodejs npm; elif command -v yum >/dev/null 2>&1; then sudo yum install -y nodejs npm; else exit 127; fi",
+			"if command -v curl >/dev/null 2>&1; then curl -fsSL https://nodejs.org/en/download -o /tmp/m2apps_node_download.html && echo '[INFO] Download reference saved to /tmp/m2apps_node_download.html'; else exit 127; fi",
 		}
 	case "mysql":
 		return []string{
 			"if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y mysql-client; elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y mysql; elif command -v yum >/dev/null 2>&1; then sudo yum install -y mysql; else exit 127; fi",
+			"if command -v curl >/dev/null 2>&1; then curl -fsSL https://dev.mysql.com/downloads/ -o /tmp/m2apps_mysql_download.html && echo '[INFO] Download reference saved to /tmp/m2apps_mysql_download.html'; else exit 127; fi",
 		}
 	case "flutter":
 		return []string{
 			"if command -v snap >/dev/null 2>&1; then sudo snap install flutter --classic; else exit 127; fi",
+			"if command -v curl >/dev/null 2>&1; then curl -fsSL https://docs.flutter.dev/get-started/install -o /tmp/m2apps_flutter_install.html && echo '[INFO] Download reference saved to /tmp/m2apps_flutter_install.html'; else exit 127; fi",
 		}
 	case "dart":
 		return []string{
 			"if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y dart; elif command -v snap >/dev/null 2>&1; then sudo snap install dart --classic; else exit 127; fi",
+			"if command -v curl >/dev/null 2>&1; then curl -fsSL https://dart.dev/get-dart -o /tmp/m2apps_dart_install.html && echo '[INFO] Download reference saved to /tmp/m2apps_dart_install.html'; else exit 127; fi",
 		}
 	default:
 		return nil
@@ -170,22 +175,27 @@ func buildWindowsCommands(tool string, targetVersion string) []string {
 	case "php":
 		return []string{
 			"where winget >nul 2>nul && winget install -e --id PHP.PHP " + versionArg + "|| (where choco >nul 2>nul && choco install php -y)",
+			"curl.exe -L https://www.php.net/downloads.php -o \"%TEMP%\\m2apps_php_download.html\"",
 		}
 	case "node":
 		return []string{
 			"where winget >nul 2>nul && winget install -e --id OpenJS.NodeJS " + versionArg + "|| (where choco >nul 2>nul && choco install nodejs-lts -y)",
+			"curl.exe -L https://nodejs.org/en/download -o \"%TEMP%\\m2apps_node_download.html\"",
 		}
 	case "mysql":
 		return []string{
 			"where winget >nul 2>nul && winget install -e --id Oracle.MySQL " + versionArg + "|| (where choco >nul 2>nul && choco install mysql -y)",
+			"curl.exe -L https://dev.mysql.com/downloads/installer/ -o \"%TEMP%\\m2apps_mysql_download.html\"",
 		}
 	case "flutter":
 		return []string{
 			"where winget >nul 2>nul && winget install -e --id Google.Flutter " + versionArg + "|| (where choco >nul 2>nul && choco install flutter -y)",
+			"curl.exe -L https://docs.flutter.dev/get-started/install/windows -o \"%TEMP%\\m2apps_flutter_install.html\"",
 		}
 	case "dart":
 		return []string{
 			"where winget >nul 2>nul && winget install -e --id Dart.DartSDK " + versionArg + "|| (where choco >nul 2>nul && choco install dart-sdk -y)",
+			"curl.exe -L https://dart.dev/get-dart -o \"%TEMP%\\m2apps_dart_install.html\"",
 		}
 	default:
 		return nil

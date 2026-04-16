@@ -42,6 +42,11 @@ type skipState struct {
 	SkippedVersion string `json:"skipped_version"`
 }
 
+type windowsUpdaterStatus struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
 func Check(currentVersion string) (CheckResult, error) {
 	current := strings.TrimSpace(currentVersion)
 	if current == "" {
@@ -159,9 +164,25 @@ func Update(currentVersion string) error {
 	}
 
 	if runtime.GOOS == "windows" {
-		if err := launchWindowsUpdater(execPath, newBinaryPath, daemonWasRunning); err != nil {
+		statusFile := filepath.Join(os.TempDir(), fmt.Sprintf("m2apps_selfupdate_status_%d.json", time.Now().UnixNano()))
+		_ = os.Remove(statusFile)
+		if err := launchWindowsUpdater(execPath, newBinaryPath, daemonWasRunning, statusFile); err != nil {
 			stopInstallSpinner(ui.Error(fmt.Sprintf("[FAIL] Install update failed: %v", err)))
 			return err
+		}
+		status, err := waitWindowsUpdaterStatus(statusFile, 90*time.Second)
+		_ = os.Remove(statusFile)
+		if err != nil {
+			stopInstallSpinner(ui.Error(fmt.Sprintf("[FAIL] Install update failed: %v", err)))
+			return err
+		}
+		if !status.Success {
+			msg := strings.TrimSpace(status.Message)
+			if msg == "" {
+				msg = "windows updater helper reported failure"
+			}
+			stopInstallSpinner(ui.Error(fmt.Sprintf("[FAIL] Install update failed: %s", msg)))
+			return errors.New(msg)
 		}
 		restoreDaemon = false
 		stopInstallSpinner(ui.Success("[OK] Install update completed"))
@@ -188,13 +209,21 @@ func Update(currentVersion string) error {
 	return nil
 }
 
-func RunInternalSelfUpdate(targetPath, newBinaryPath string, parentPID int, restart bool, restartDaemon bool) error {
+func RunInternalSelfUpdate(targetPath, newBinaryPath string, parentPID int, restart bool, restartDaemon bool, statusFile string) error {
 	target := filepath.Clean(strings.TrimSpace(targetPath))
 	newBin := filepath.Clean(strings.TrimSpace(newBinaryPath))
+	writeStatus := func(success bool, message string) {
+		_ = writeWindowsUpdaterStatus(statusFile, windowsUpdaterStatus{
+			Success: success,
+			Message: strings.TrimSpace(message),
+		})
+	}
 	if target == "" {
+		writeStatus(false, "target path is required")
 		return fmt.Errorf("target path is required")
 	}
 	if newBin == "" {
+		writeStatus(false, "new binary path is required")
 		return fmt.Errorf("new binary path is required")
 	}
 
@@ -203,24 +232,52 @@ func RunInternalSelfUpdate(targetPath, newBinaryPath string, parentPID int, rest
 	}
 
 	if _, err := os.Stat(newBin); err != nil {
+		writeStatus(false, fmt.Sprintf("new binary not found: %v", err))
 		return fmt.Errorf("new binary not found: %w", err)
 	}
 
 	if err := replaceBinary(target, newBin); err != nil {
+		if runtime.GOOS == "windows" && isPermissionDeniedError(err) && !privilege.IsElevated() {
+			args := []string{
+				"internal", "self-update",
+				"--target", target,
+				"--new", newBin,
+				"--parent-pid", "0",
+				"--restart", strconv.FormatBool(restart),
+				"--restart-daemon", strconv.FormatBool(restartDaemon),
+			}
+			if strings.TrimSpace(statusFile) != "" {
+				args = append(args, "--status-file", statusFile)
+			}
+			if elevateErr := privilege.RelaunchElevated(args); elevateErr != nil {
+				writeStatus(false, fmt.Sprintf("failed to relaunch elevated updater: %v", elevateErr))
+				return fmt.Errorf("failed to relaunch elevated updater: %w", elevateErr)
+			}
+			return nil
+		}
+		writeStatus(false, err.Error())
 		return err
 	}
 
 	if restartDaemon {
 		if err := startDaemonAfterSelfUpdate(); err != nil {
+			writeStatus(false, fmt.Sprintf("updated binary but failed to restart daemon: %v", err))
 			return fmt.Errorf("updated binary but failed to restart daemon: %w", err)
 		}
 	}
 
 	if !restart {
+		writeStatus(true, "updated successfully")
 		return nil
 	}
 
-	return restartBinary(target)
+	if err := restartBinary(target); err != nil {
+		writeStatus(false, fmt.Sprintf("failed to restart application: %v", err))
+		return err
+	}
+
+	writeStatus(true, "updated successfully")
+	return nil
 }
 
 func ReadSkippedVersion() (string, error) {
@@ -410,7 +467,7 @@ func writeBinaryFile(path string, src io.Reader, mode os.FileMode) error {
 	return nil
 }
 
-func launchWindowsUpdater(targetPath, newBinaryPath string, restartDaemon bool) error {
+func launchWindowsUpdater(targetPath, newBinaryPath string, restartDaemon bool, statusFile string) error {
 	helperPath := filepath.Join(os.TempDir(), fmt.Sprintf("m2apps_updater_%d.exe", time.Now().UnixNano()))
 	if err := copyFile(targetPath, helperPath, 0o755); err != nil {
 		return fmt.Errorf("failed to prepare windows updater helper: %w", err)
@@ -425,6 +482,7 @@ func launchWindowsUpdater(targetPath, newBinaryPath string, restartDaemon bool) 
 		"--parent-pid", strconv.Itoa(os.Getpid()),
 		"--restart", "true",
 		"--restart-daemon", strconv.FormatBool(restartDaemon),
+		"--status-file", statusFile,
 	)
 	configureUpdaterProcess(cmd)
 	cmd.Stdin = nil
@@ -434,6 +492,48 @@ func launchWindowsUpdater(targetPath, newBinaryPath string, restartDaemon bool) 
 		return fmt.Errorf("failed to start windows updater helper: %w", err)
 	}
 	return nil
+}
+
+func writeWindowsUpdaterStatus(path string, status windowsUpdaterStatus) error {
+	target := strings.TrimSpace(path)
+	if target == "" {
+		return nil
+	}
+	raw, err := json.Marshal(status)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(target, raw, 0o600)
+}
+
+func waitWindowsUpdaterStatus(path string, timeout time.Duration) (windowsUpdaterStatus, error) {
+	target := strings.TrimSpace(path)
+	if target == "" {
+		return windowsUpdaterStatus{}, fmt.Errorf("status file path is required")
+	}
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		raw, err := os.ReadFile(target)
+		if err != nil {
+			if os.IsNotExist(err) {
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+			return windowsUpdaterStatus{}, fmt.Errorf("failed to read updater status: %w", err)
+		}
+
+		var status windowsUpdaterStatus
+		if err := json.Unmarshal(raw, &status); err != nil {
+			return windowsUpdaterStatus{}, fmt.Errorf("invalid updater status: %w", err)
+		}
+		return status, nil
+	}
+
+	return windowsUpdaterStatus{}, fmt.Errorf("windows updater timed out")
 }
 
 func applyAndRestart(targetPath, newBinaryPath string) error {

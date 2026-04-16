@@ -117,17 +117,30 @@ func (m *Manager) Stop() error {
 	pid, err := m.readPID()
 	if err != nil {
 		if os.IsNotExist(err) {
+			m.cleanupRuntimeFiles()
 			return nil
 		}
 		return err
 	}
 
-	process, err := os.FindProcess(pid)
-	if err == nil {
-		_ = process.Kill()
+	if err := terminatePID(pid); err != nil && daemonProcessAlive(pid) {
+		return err
 	}
 
-	_ = os.Remove(m.pidFile)
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if !daemonProcessAlive(pid) {
+			m.cleanupRuntimeFiles()
+			return nil
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+
+	if daemonProcessAlive(pid) {
+		return fmt.Errorf("failed to stop daemon pid %d: process is still running", pid)
+	}
+
+	m.cleanupRuntimeFiles()
 	return nil
 }
 
@@ -316,6 +329,7 @@ func (m *Manager) writeRuntimeFiles(pid, port int) error {
 
 func (m *Manager) cleanupRuntimeFiles() {
 	_ = os.Remove(m.pidFile)
+	_ = os.Remove(m.portFile)
 }
 
 func (m *Manager) readPID() (int, error) {
@@ -339,21 +353,69 @@ func (m *Manager) isRunning() (bool, error) {
 		return false, err
 	}
 
+	return daemonProcessAlive(pid), nil
+}
+
+func terminatePID(pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+
+	pidValue := strconv.Itoa(pid)
+	if runtime.GOOS == "windows" {
+		out, err := system.CombinedOutput("taskkill", "/PID", pidValue, "/T", "/F")
+		if err != nil {
+			lower := strings.ToLower(strings.TrimSpace(string(out)))
+			if strings.Contains(lower, "not found") || strings.Contains(lower, "no running instance") {
+				return nil
+			}
+			return fmt.Errorf("failed to stop daemon pid %d: %s", pid, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+
+	out, err := system.CombinedOutput("kill", "-TERM", pidValue)
+	if err != nil && daemonProcessAlive(pid) {
+		out, err = system.CombinedOutput("kill", "-KILL", pidValue)
+		if err != nil && daemonProcessAlive(pid) {
+			return fmt.Errorf("failed to stop daemon pid %d: %s", pid, strings.TrimSpace(string(out)))
+		}
+	}
+
+	return nil
+}
+
+func daemonProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+
+	pidValue := strconv.Itoa(pid)
+	if runtime.GOOS == "windows" {
+		out, err := system.CombinedOutput("tasklist", "/FI", fmt.Sprintf("PID eq %s", pidValue))
+		if err != nil {
+			return false
+		}
+
+		text := strings.ToLower(string(out))
+		if strings.Contains(text, "no tasks are running") || strings.Contains(text, "info: no tasks") {
+			return false
+		}
+		return strings.Contains(text, pidValue)
+	}
+
 	process, err := os.FindProcess(pid)
 	if err != nil {
-		return false, nil
+		return false
 	}
 
 	err = process.Signal(syscall.Signal(0))
 	if err == nil {
-		return true, nil
+		return true
 	}
 
-	if runtime.GOOS == "windows" && strings.Contains(strings.ToLower(err.Error()), "not supported") {
-		return true, nil
-	}
-
-	return false, nil
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(lower, "operation not permitted")
 }
 
 func (m *Manager) bindListener() (net.Listener, int, error) {

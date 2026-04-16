@@ -23,22 +23,34 @@ func relaunchElevated(args []string) error {
 
 	switch runtime.GOOS {
 	case "linux":
-		if _, err := exec.LookPath("pkexec"); err != nil {
-			return fmt.Errorf("pkexec is required for privileged operation on Linux")
-		}
-
 		baseDir := strings.TrimSpace(os.Getenv("M2APPS_HOME"))
 		if baseDir == "" {
 			baseDir = system.GetBaseDir()
 		}
 
-		cmdArgs := []string{"env", "M2APPS_HOME=" + baseDir, execPath}
-		cmdArgs = append(cmdArgs, args...)
-		cmd := exec.Command("pkexec", cmdArgs...)
+		if _, err := exec.LookPath("pkexec"); err == nil {
+			cmdArgs := []string{"env", "M2APPS_HOME=" + baseDir, execPath}
+			cmdArgs = append(cmdArgs, args...)
+			cmd := exec.Command("pkexec", cmdArgs...)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			cmd.Stdin = os.Stdin
+
+			if runErr := cmd.Run(); runErr == nil {
+				return nil
+			}
+		}
+
+		if _, err := exec.LookPath("sudo"); err != nil {
+			return fmt.Errorf("privileged operation requires pkexec or sudo on Linux")
+		}
+
+		sudoArgs := []string{"M2APPS_HOME=" + baseDir, execPath}
+		sudoArgs = append(sudoArgs, args...)
+		cmd := exec.Command("sudo", sudoArgs...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		cmd.Stdin = os.Stdin
-
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("privileged operation failed: %w", err)
 		}

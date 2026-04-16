@@ -15,6 +15,7 @@ var (
 	internalSelfUpdateParentPID int
 	internalSelfUpdateRestart   bool
 	internalSelfUpdateDaemon    bool
+	internalSelfUpdateStatus    string
 )
 
 var internalCmd = &cobra.Command{
@@ -34,6 +35,7 @@ var internalSelfUpdateCmd = &cobra.Command{
 			internalSelfUpdateParentPID,
 			internalSelfUpdateRestart,
 			internalSelfUpdateDaemon,
+			internalSelfUpdateStatus,
 		); err != nil {
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			os.Exit(1)
@@ -47,6 +49,7 @@ func init() {
 	internalSelfUpdateCmd.Flags().IntVar(&internalSelfUpdateParentPID, "parent-pid", 0, "parent process PID")
 	internalSelfUpdateCmd.Flags().BoolVar(&internalSelfUpdateRestart, "restart", true, "restart application after replacing binary")
 	internalSelfUpdateCmd.Flags().BoolVar(&internalSelfUpdateDaemon, "restart-daemon", false, "restart daemon service after replacing binary")
+	internalSelfUpdateCmd.Flags().StringVar(&internalSelfUpdateStatus, "status-file", "", "windows helper status file")
 	internalSelfUpdateCmd.MarkFlagRequired("target")
 	internalSelfUpdateCmd.MarkFlagRequired("new")
 

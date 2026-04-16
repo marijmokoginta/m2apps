@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"m2apps/internal/network"
+	"m2apps/internal/privilege"
 	"m2apps/internal/process"
 	"m2apps/internal/ui"
 	"os"
@@ -159,6 +160,9 @@ func runAppCommand(action string, inputAppID string) error {
 		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Stopping app %s...", appID)))
 		state, err := manager.Stop(appID)
 		if err != nil {
+			if escalated, escalateErr := retryAppActionWithElevation("stop", appID, err); escalated {
+				return escalateErr
+			}
 			return err
 		}
 		if len(state.Processes) == 0 {
@@ -172,6 +176,9 @@ func runAppCommand(action string, inputAppID string) error {
 		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Restarting app %s...", appID)))
 		state, err := manager.Restart(appID)
 		if err != nil {
+			if escalated, escalateErr := retryAppActionWithElevation("restart", appID, err); escalated {
+				return escalateErr
+			}
 			return err
 		}
 		fmt.Println(ui.Success(fmt.Sprintf("[OK] Restarted app %s (%d process(es))", appID, len(state.Processes))))
@@ -194,6 +201,52 @@ func runAppCommand(action string, inputAppID string) error {
 	default:
 		return fmt.Errorf("unsupported app process action %q", action)
 	}
+}
+
+func retryAppActionWithElevation(action, appID string, originalErr error) (bool, error) {
+	if originalErr == nil {
+		return false, nil
+	}
+	if privilege.IsElevated() || !shouldAttemptElevation(action, originalErr) {
+		return false, nil
+	}
+
+	fmt.Println(ui.Info("[INFO] Supervisor permission required. Opening OS authentication popup..."))
+	if err := privilege.RelaunchElevated([]string{"app", strings.TrimSpace(action), strings.TrimSpace(appID)}); err != nil {
+		return true, err
+	}
+
+	return true, nil
+}
+
+func isPrivilegeError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	text := strings.ToLower(strings.TrimSpace(err.Error()))
+	if text == "" {
+		return false
+	}
+
+	return strings.Contains(text, "permission denied") ||
+		strings.Contains(text, "operation not permitted") ||
+		strings.Contains(text, "access is denied")
+}
+
+func shouldAttemptElevation(action string, err error) bool {
+	if isPrivilegeError(err) {
+		return true
+	}
+
+	act := strings.ToLower(strings.TrimSpace(action))
+	if act != "stop" && act != "restart" {
+		return false
+	}
+
+	text := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(text, "failed to stop pid") ||
+		strings.Contains(text, "process is still running")
 }
 
 func renderProcessStatusTable(processes []process.Process) string {

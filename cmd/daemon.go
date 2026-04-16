@@ -249,9 +249,7 @@ func runDaemonCommand(action string) error {
 	case "start":
 		return runDaemonStart()
 	case "stop":
-		return runServiceAction("Stopping service...", "Service stopped", "stop service", func(m service.ServiceManager) error {
-			return m.Stop()
-		})
+		return runDaemonStop()
 	case "status":
 		return runDaemonStatus()
 	case "api_info":
@@ -284,6 +282,60 @@ func runDaemonStart() error {
 
 	fmt.Println(ui.Success("[OK] Service started"))
 	return nil
+}
+
+func runDaemonStop() error {
+	serviceManager := service.NewServiceManager()
+	daemonManager, dmErr := daemon.NewManager()
+	if dmErr != nil {
+		return dmErr
+	}
+
+	fmt.Println(ui.Info("[INFO] Stopping daemon service/process..."))
+
+	stopServiceErr := serviceManager.Stop()
+	if stopServiceErr != nil && !isIgnorableServiceStopErr(stopServiceErr) {
+		printServiceError("stop service", stopServiceErr)
+	}
+
+	if err := daemonManager.Stop(); err != nil {
+		printServiceError("stop daemon process", err)
+		return err
+	}
+
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		state := collectLocalAPIState()
+		if state.Port <= 0 || (!state.TCPReady && !state.HTTPReady) {
+			fmt.Println(ui.Success("[OK] Daemon stopped"))
+			return nil
+		}
+		time.Sleep(180 * time.Millisecond)
+	}
+
+	state := collectLocalAPIState()
+	if state.Port > 0 && (state.TCPReady || state.HTTPReady) {
+		return fmt.Errorf("daemon stop verification failed: local API is still reachable at %s", state.URL)
+	}
+
+	fmt.Println(ui.Success("[OK] Daemon stopped"))
+	return nil
+}
+
+func isIgnorableServiceStopErr(err error) bool {
+	if err == nil {
+		return true
+	}
+
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	if message == "" {
+		return false
+	}
+
+	return strings.Contains(message, "service not found") ||
+		strings.Contains(message, "has not been started") ||
+		strings.Contains(message, "already stopped") ||
+		strings.Contains(message, "could not find the specified service")
 }
 
 func daemonActionNeedsSupervisor(action string) bool {
