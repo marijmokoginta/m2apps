@@ -3,7 +3,9 @@ package process
 import (
 	"fmt"
 	"m2apps/internal/env"
+	"m2apps/internal/hostmode"
 	"m2apps/internal/network"
+	"m2apps/internal/preset"
 	appruntime "m2apps/internal/runtime"
 	"m2apps/internal/storage"
 	"m2apps/internal/system"
@@ -67,6 +69,10 @@ func (m *Manager) Start(appID string) (AppProcesses, error) {
 	}
 
 	resolvedPort := m.resolveRuntimePort(cfg.Preset, current.Processes)
+	runtimeHost, appURLHost, err := resolveAppHosts(cfg.Preset, cfg.ServerMode)
+	if err != nil {
+		return AppProcesses{}, err
+	}
 
 	logFile, err := openAppLogFile(id)
 	if err != nil {
@@ -76,7 +82,7 @@ func (m *Manager) Start(appID string) (AppProcesses, error) {
 
 	started := make([]Process, 0, len(processDefs))
 	for _, def := range processDefs {
-		command := applyPortPlaceholder(def.Command, resolvedPort)
+		command := applyPortPlaceholder(withProcessHost(def.Name, def.Command, runtimeHost), resolvedPort)
 		if len(command) == 0 {
 			continue
 		}
@@ -112,16 +118,116 @@ func (m *Manager) Start(appID string) (AppProcesses, error) {
 		return AppProcesses{}, err
 	}
 
-	if err := env.InjectAppURL(workDir, resolvedPort); err != nil {
+	appURL := fmt.Sprintf("http://%s:%d", appURLHost, resolvedPort)
+	appURLChanged, err := env.UpsertWithResult(workDir, map[string]string{
+		"APP_URL": appURL,
+	})
+	if err != nil {
 		for _, created := range started {
 			_ = stopByPID(created.PID)
 		}
 		return AppProcesses{}, fmt.Errorf("failed to inject APP_URL into env: %w", err)
 	}
 
+	if appURLChanged {
+		if err := preset.RunOnAppURLChange(cfg.Preset, workDir); err != nil {
+			for _, created := range started {
+				_ = stopByPID(created.PID)
+			}
+			return AppProcesses{}, fmt.Errorf("failed to run preset tasks on APP_URL change: %w", err)
+		}
+	}
+
 	return AppProcesses{
 		AppID:     id,
 		Processes: started,
+	}, nil
+}
+
+func (m *Manager) RestartNamed(appID string, processNames ...string) (AppProcesses, error) {
+	id := strings.TrimSpace(appID)
+	if id == "" {
+		return AppProcesses{}, fmt.Errorf("app_id is required")
+	}
+
+	if len(processNames) == 0 {
+		return m.Status(id)
+	}
+
+	entry, err := m.registry.Get(id)
+	if err != nil {
+		return AppProcesses{}, err
+	}
+	if len(entry.Processes) == 0 {
+		return entry, nil
+	}
+
+	cfg, err := m.store.Load(id)
+	if err != nil {
+		return AppProcesses{}, fmt.Errorf("failed to load app metadata: %w", err)
+	}
+
+	workDir := filepath.Clean(strings.TrimSpace(cfg.InstallPath))
+	if workDir == "" || workDir == "." {
+		return AppProcesses{}, fmt.Errorf("invalid install path for app %s", id)
+	}
+
+	logFile, err := openAppLogFile(id)
+	if err != nil {
+		return AppProcesses{}, err
+	}
+	defer logFile.Close()
+
+	targets := make(map[string]struct{}, len(processNames))
+	for _, name := range processNames {
+		normalized := strings.ToLower(strings.TrimSpace(name))
+		if normalized != "" {
+			targets[normalized] = struct{}{}
+		}
+	}
+
+	updated := make([]Process, 0, len(entry.Processes))
+	for _, proc := range entry.Processes {
+		current := proc
+		if _, ok := targets[strings.ToLower(strings.TrimSpace(current.Name))]; !ok {
+			updated = append(updated, current)
+			continue
+		}
+
+		if current.PID > 0 {
+			_ = stopByPID(current.PID)
+		}
+
+		if len(current.Command) == 0 {
+			current.Status = "stopped"
+			current.PID = 0
+			updated = append(updated, current)
+			continue
+		}
+
+		cmd := system.NewProcessCommand(current.Command[0], current.Command[1:]...)
+		cmd.Dir = workDir
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+		cmd.Env = os.Environ()
+
+		if err := cmd.Start(); err != nil {
+			return AppProcesses{}, fmt.Errorf("failed to restart process %s: %w", current.Name, err)
+		}
+
+		current.PID = cmd.Process.Pid
+		current.Status = "running"
+		_ = cmd.Process.Release()
+		updated = append(updated, current)
+	}
+
+	if err := m.registry.Set(id, updated); err != nil {
+		return AppProcesses{}, err
+	}
+
+	return AppProcesses{
+		AppID:     id,
+		Processes: updated,
 	}, nil
 }
 
@@ -336,4 +442,76 @@ func applyPortPlaceholder(command []string, port int) []string {
 		resolved = append(resolved, item)
 	}
 	return resolved
+}
+
+func resolveAppHosts(presetName string, mode string) (runtimeHost string, appURLHost string, err error) {
+	runtimeHost = "127.0.0.1"
+	appURLHost = "127.0.0.1"
+
+	if !isLaravelPresetName(presetName) {
+		return runtimeHost, appURLHost, nil
+	}
+
+	if hostmode.Normalize(mode) != hostmode.LAN {
+		return runtimeHost, appURLHost, nil
+	}
+
+	ip, ipErr := network.ResolveLocalIPv4()
+	if ipErr != nil {
+		return "", "", fmt.Errorf("failed to resolve LAN IP for preset %s: %w", strings.TrimSpace(presetName), ipErr)
+	}
+
+	return "0.0.0.0", ip, nil
+}
+
+func withProcessHost(processName string, command []string, host string) []string {
+	if strings.ToLower(strings.TrimSpace(processName)) != "web" {
+		return command
+	}
+	if strings.TrimSpace(host) == "" {
+		return command
+	}
+
+	resolved := make([]string, 0, len(command))
+	replaced := false
+
+	for i := 0; i < len(command); i++ {
+		part := strings.TrimSpace(command[i])
+		if part == "" {
+			continue
+		}
+
+		lower := strings.ToLower(part)
+		switch {
+		case strings.HasPrefix(lower, "--host="):
+			resolved = append(resolved, "--host="+host)
+			replaced = true
+		case lower == "--host":
+			resolved = append(resolved, "--host")
+			if i+1 < len(command) {
+				resolved = append(resolved, host)
+				i++
+			} else {
+				resolved = append(resolved, host)
+			}
+			replaced = true
+		default:
+			resolved = append(resolved, part)
+		}
+	}
+
+	if !replaced {
+		resolved = append(resolved, "--host="+host)
+	}
+
+	return resolved
+}
+
+func isLaravelPresetName(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "laravel", "laravel-inertia":
+		return true
+	default:
+		return false
+	}
 }

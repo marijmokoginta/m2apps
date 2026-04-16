@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"m2apps/internal/hostmode"
 	"strings"
 )
 
@@ -44,6 +45,14 @@ func (c *InstallConfig) Validate() error {
 		errors = append(errors, "preset is required")
 	}
 
+	if !hostmode.IsValid(c.ServerMode) {
+		errors = append(errors, "server_mode must be one of: localhost, lan")
+	}
+
+	if hostmode.Normalize(c.ServerMode) == hostmode.LAN && !isLaravelPreset(c.Preset) {
+		errors = append(errors, "server_mode=lan is only supported for preset: laravel, laravel-inertia")
+	}
+
 	channel := strings.ToLower(strings.TrimSpace(c.Channel))
 	if channel != "" && channel != "stable" && channel != "beta" && channel != "alpha" {
 		errors = append(errors, "channel must be one of: stable, beta, alpha")
@@ -68,6 +77,15 @@ func (c *InstallConfig) Validate() error {
 	}
 
 	return nil
+}
+
+func isLaravelPreset(preset string) bool {
+	switch strings.ToLower(strings.TrimSpace(preset)) {
+	case "laravel", "laravel-inertia":
+		return true
+	default:
+		return false
+	}
 }
 
 func joinErrors(errs []string) string {

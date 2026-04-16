@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
+	"m2apps/internal/hostmode"
 	"m2apps/internal/system"
 	"os"
 	"path/filepath"
@@ -69,9 +70,15 @@ func (s *FileStorage) Load(appID string) (AppConfig, error) {
 		return AppConfig{}, fmt.Errorf("failed to read encrypted config: %w", err)
 	}
 
-	plain, err := decrypt(cipherData)
+	plain, migrated, err := decryptWithMigrationFlag(cipherData)
 	if err != nil {
 		return AppConfig{}, err
+	}
+
+	if migrated {
+		if encrypted, encErr := encrypt(plain); encErr == nil {
+			_ = os.WriteFile(configPath, encrypted, 0o600)
+		}
 	}
 
 	var raw map[string]json.RawMessage
@@ -85,6 +92,11 @@ func (s *FileStorage) Load(appID string) (AppConfig, error) {
 	}
 	if _, ok := raw["auto_start"]; !ok {
 		cfg.AutoStart = true
+	}
+	if _, ok := raw["server_mode"]; !ok {
+		cfg.ServerMode = hostmode.Localhost
+	} else {
+		cfg.ServerMode = hostmode.Normalize(cfg.ServerMode)
 	}
 
 	return cfg, nil

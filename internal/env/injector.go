@@ -13,18 +13,24 @@ func Inject(installPath string, vars map[string]string) error {
 }
 
 func Upsert(installPath string, vars map[string]string) error {
+	_, err := UpsertWithResult(installPath, vars)
+	return err
+}
+
+func UpsertWithResult(installPath string, vars map[string]string) (bool, error) {
 	targetFile, err := resolveTargetEnvFile(installPath)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	content, err := os.ReadFile(targetFile)
 	if err != nil {
-		return fmt.Errorf("failed to read env file %s: %w", targetFile, err)
+		return false, fmt.Errorf("failed to read env file %s: %w", targetFile, err)
 	}
 
 	lines := strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n")
 	replaced := make(map[string]struct{}, len(vars))
+	changed := false
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
@@ -38,8 +44,14 @@ func Upsert(installPath string, vars map[string]string) error {
 			continue
 		}
 
+		if len(parts) == 2 && strings.TrimSpace(parts[1]) == value {
+			replaced[key] = struct{}{}
+			continue
+		}
+
 		lines[i] = fmt.Sprintf("%s=%s", key, value)
 		replaced[key] = struct{}{}
+		changed = true
 	}
 
 	for key, value := range vars {
@@ -47,15 +59,16 @@ func Upsert(installPath string, vars map[string]string) error {
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("%s=%s", key, value))
+		changed = true
 	}
 
 	updated := strings.Join(lines, "\n")
 	updated = strings.TrimRight(updated, "\n") + "\n"
 	if err := os.WriteFile(targetFile, []byte(updated), 0o644); err != nil {
-		return fmt.Errorf("failed to write env file %s: %w", targetFile, err)
+		return false, fmt.Errorf("failed to write env file %s: %w", targetFile, err)
 	}
 
-	return nil
+	return changed, nil
 }
 
 func InjectAppURL(installPath string, port int) error {

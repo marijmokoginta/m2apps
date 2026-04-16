@@ -185,6 +185,18 @@ This script generates binaries and release archives in the `dist/` directory.
 }
 ```
 
+For `laravel` and `laravel-inertia`, you can optionally set:
+
+```json
+{
+  "server_mode": "localhost"
+}
+```
+
+Allowed values:
+- `localhost`: run app server on `127.0.0.1` and inject `APP_URL=http://127.0.0.1:{PORT}`
+- `lan`: run app server on `0.0.0.0` and inject `APP_URL=http://<local-ip>:{PORT}`
+
 ## Local API Documentation
 
 Base URL:

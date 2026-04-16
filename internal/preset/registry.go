@@ -8,12 +8,23 @@ type Step struct {
 }
 
 var Presets = map[string][]Step{
+	"laravel": {
+		{Type: "command", Run: "composer install"},
+		{Type: "command", Run: "php artisan key:generate"},
+		{Type: "command", Run: "php artisan migrate --force"},
+		{Type: "command", Run: "npm install"},
+		{Type: "command", Run: "npm run build"},
+		{Type: "command", Run: "php artisan storage:link"},
+		{Type: "command", Run: "php artisan optimize:clear"},
+	},
 	"laravel-inertia": {
 		{Type: "command", Run: "composer install"},
 		{Type: "command", Run: "php artisan key:generate"},
 		{Type: "command", Run: "php artisan migrate --force"},
 		{Type: "command", Run: "npm install"},
 		{Type: "command", Run: "npm run build"},
+		{Type: "command", Run: "php artisan storage:link"},
+		{Type: "command", Run: "php artisan optimize:clear"},
 	},
 }
 

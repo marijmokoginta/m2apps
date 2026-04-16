@@ -55,14 +55,9 @@ func Install(ctx InstallContext) error {
 	}
 	fmt.Println(ui.Success("[OK] Files extracted"))
 
-	steps, err := preset.GetPreset(ctx.Preset)
-	if err != nil {
-		return err
-	}
-
 	reportProgress(ctx, "install", "running preset", 78, "Running preset")
 	fmt.Println(ui.Info("[INFO] Running installation preset..."))
-	if err := preset.RunSteps(steps, tempDir); err != nil {
+	if err := preset.RunInstallPreset(ctx.Preset, tempDir); err != nil {
 		return err
 	}
 	fmt.Println(ui.Success("[OK] Preset execution completed"))
@@ -88,10 +83,8 @@ func moveExtractedFiles(fromDir string, toDir string) error {
 		srcPath := filepath.Join(fromDir, name)
 		dstPath := filepath.Join(toDir, name)
 
-		if _, err := os.Stat(dstPath); err == nil {
-			return fmt.Errorf("target path already exists: %s", dstPath)
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("failed to check target path %s: %w", dstPath, err)
+		if err := os.RemoveAll(dstPath); err != nil {
+			return fmt.Errorf("failed to overwrite target path %s: %w", dstPath, err)
 		}
 
 		if err := os.Rename(srcPath, dstPath); err != nil {

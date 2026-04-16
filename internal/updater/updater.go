@@ -5,6 +5,8 @@ import (
 	"m2apps/internal/downloader"
 	"m2apps/internal/github"
 	"m2apps/internal/installer"
+	"m2apps/internal/preset"
+	"m2apps/internal/process"
 	"m2apps/internal/progress"
 	"m2apps/internal/storage"
 	"m2apps/internal/ui"
@@ -148,6 +150,29 @@ func Update(appID string) error {
 		pm.Fail(id)
 		return err
 	}
+	cleanupUpdateArtifacts(config.InstallPath, downloadPath)
+
+	if err := preset.RunPostUpdate(config.Preset, config.InstallPath); err != nil {
+		pm.Log(id, err.Error())
+		pm.Fail(id)
+		return fmt.Errorf("failed to run post-update preset tasks: %w", err)
+	}
+
+	targets := preset.RestartProcessTargets(config.Preset)
+	if len(targets) > 0 {
+		processManager, err := process.NewManager()
+		if err != nil {
+			pm.Log(id, err.Error())
+			pm.Fail(id)
+			return fmt.Errorf("failed to initialize process manager: %w", err)
+		}
+
+		if _, err := processManager.RestartNamed(config.AppID, targets...); err != nil {
+			pm.Log(id, err.Error())
+			pm.Fail(id)
+			return fmt.Errorf("failed to restart preset processes: %w", err)
+		}
+	}
 
 	config.Version = target.TagName
 	config.Channel = channel
@@ -242,4 +267,17 @@ func formatBytes(size int64) string {
 
 	gb := mb / 1024
 	return fmt.Sprintf("%.1fGB", gb)
+}
+
+func cleanupUpdateArtifacts(installPath string, downloadPath string) {
+	if strings.TrimSpace(downloadPath) != "" {
+		if err := os.Remove(downloadPath); err != nil && !os.IsNotExist(err) {
+			fmt.Println(ui.Warning(fmt.Sprintf("[WARN] Failed to remove downloaded update package: %v", err)))
+		}
+	}
+
+	tmpRoot := filepath.Join(filepath.Clean(strings.TrimSpace(installPath)), ".m2apps_tmp")
+	if err := os.RemoveAll(tmpRoot); err != nil && !os.IsNotExist(err) {
+		fmt.Println(ui.Warning(fmt.Sprintf("[WARN] Failed to clean temp directory %s: %v", tmpRoot, err)))
+	}
 }

@@ -11,6 +11,7 @@ type AppConfig struct {
 	Version     string `json:"version"`
 	Channel     string `json:"channel"`
 	Preset      string `json:"preset"`
+	ServerMode  string `json:"server_mode"`
 	AutoStart   bool   `json:"auto_start"`
 }
 

@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"archive/zip"
 	"fmt"
 	"m2apps/internal/config"
 	"m2apps/internal/daemon"
 	"m2apps/internal/downloader"
 	"m2apps/internal/env"
 	"m2apps/internal/github"
+	"m2apps/internal/hostmode"
 	"m2apps/internal/installer"
 	"m2apps/internal/requirements"
 	_ "m2apps/internal/requirements/checkers"
@@ -16,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -63,6 +66,9 @@ var installCmd = &cobra.Command{
 		fmt.Printf("%s %s\n", ui.Info("[INFO] App:"), cfg.Name)
 		fmt.Printf("%s %s\n", ui.Info("[INFO] Preset:"), cfg.Preset)
 		fmt.Printf("%s %s\n", ui.Info("[INFO] Channel:"), channel)
+		if isLaravelPresetName(cfg.Preset) {
+			fmt.Printf("%s %s\n", ui.Info("[INFO] Server mode:"), hostmode.Normalize(cfg.ServerMode))
+		}
 
 		reqs := make([]requirements.Requirement, 0, len(cfg.Requirements))
 		for _, req := range cfg.Requirements {
@@ -110,19 +116,30 @@ var installCmd = &cobra.Command{
 		}
 
 		dest := filepath.Join(".", asset.Name)
-		fmt.Println()
-		fmt.Printf("%s %s...\n", ui.Info("[INFO] Downloading"), asset.Name)
-
-		dl := downloader.New(cfg.Auth.Value)
-		if err := dl.Download(asset.URL, dest, printDownloadProgress); err != nil {
-			fmt.Println()
+		shouldDownload, err := shouldDownloadInstallArchive(dest, 30*24*time.Hour)
+		if err != nil {
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			fmt.Println(ui.Error("[ERROR] Installation aborted."))
 			os.Exit(1)
 		}
 
-		fmt.Println()
-		fmt.Println(ui.Success("[OK] Download completed."))
+		if shouldDownload {
+			fmt.Println()
+			fmt.Printf("%s %s...\n", ui.Info("[INFO] Downloading"), asset.Name)
+
+			dl := downloader.New(cfg.Auth.Value)
+			if err := dl.Download(asset.URL, dest, printDownloadProgress); err != nil {
+				fmt.Println()
+				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+				fmt.Println(ui.Error("[ERROR] Installation aborted."))
+				os.Exit(1)
+			}
+
+			fmt.Println()
+			fmt.Println(ui.Success("[OK] Download completed."))
+		} else {
+			fmt.Printf("%s %s\n", ui.Info("[INFO] Reusing existing archive:"), asset.Name)
+		}
 
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -144,6 +161,8 @@ var installCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		cleanupInstallArtifacts(cwd, dest)
+
 		appConfig := storage.AppConfig{
 			AppID:       cfg.AppID,
 			Name:        cfg.Name,
@@ -154,6 +173,7 @@ var installCmd = &cobra.Command{
 			Version:     release.TagName,
 			Channel:     channel,
 			Preset:      cfg.Preset,
+			ServerMode:  hostmode.Normalize(cfg.ServerMode),
 			AutoStart:   true,
 		}
 
@@ -207,10 +227,6 @@ var installCmd = &cobra.Command{
 			fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 			fmt.Println(ui.Error("[ERROR] Installation aborted."))
 			os.Exit(1)
-		}
-
-		if err := os.Remove("install.json"); err != nil && !os.IsNotExist(err) {
-			fmt.Println(ui.Warning(fmt.Sprintf("[WARN] Failed to remove install.json: %v", err)))
 		}
 
 		fmt.Println(ui.Success("[OK] Installation completed."))
@@ -297,4 +313,82 @@ func formatBytes(size int64) string {
 
 	gb := mb / 1024
 	return fmt.Sprintf("%.1fGB", gb)
+}
+
+func shouldDownloadInstallArchive(path string, maxAge time.Duration) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("failed to check archive cache %s: %w", path, err)
+	}
+	if info.IsDir() {
+		return false, fmt.Errorf("archive cache path is a directory: %s", path)
+	}
+	if info.Size() <= 0 {
+		return true, nil
+	}
+
+	age := time.Since(info.ModTime())
+	if age > maxAge {
+		fmt.Println(ui.Warning(fmt.Sprintf("[WARN] Existing archive is older than %d days, downloading a fresh copy.", int(maxAge.Hours()/24))))
+		return true, nil
+	}
+
+	ok, err := isValidZipArchive(path)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		fmt.Println(ui.Warning("[WARN] Existing archive is incomplete/corrupt, resuming download."))
+		return true, nil
+	}
+
+	return false, nil
+}
+
+func isLaravelPresetName(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "laravel", "laravel-inertia":
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidZipArchive(path string) (bool, error) {
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "not a valid zip file") ||
+			strings.Contains(lower, "zip: not a valid zip file") ||
+			strings.Contains(lower, "unexpected eof") {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to validate archive %s: %w", path, err)
+	}
+	defer reader.Close()
+
+	if len(reader.File) == 0 {
+		return false, nil
+	}
+	return true, nil
+}
+
+func cleanupInstallArtifacts(cwd string, zipPath string) {
+	if err := os.Remove(filepath.Join(cwd, "install.json")); err != nil && !os.IsNotExist(err) {
+		fmt.Println(ui.Warning(fmt.Sprintf("[WARN] Failed to remove install.json: %v", err)))
+	}
+
+	if strings.TrimSpace(zipPath) != "" {
+		if err := os.Remove(zipPath); err != nil && !os.IsNotExist(err) {
+			fmt.Println(ui.Warning(fmt.Sprintf("[WARN] Failed to remove downloaded archive: %v", err)))
+		}
+	}
+
+	tempRoot := filepath.Join(cwd, ".m2apps_tmp")
+	if err := os.RemoveAll(tempRoot); err != nil && !os.IsNotExist(err) {
+		fmt.Println(ui.Warning(fmt.Sprintf("[WARN] Failed to clean temp directory %s: %v", tempRoot, err)))
+	}
 }

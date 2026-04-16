@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"m2apps/internal/network"
 	"m2apps/internal/process"
 	"m2apps/internal/ui"
 	"os"
@@ -291,7 +292,12 @@ func inferProcessURL(proc process.Process) string {
 	}
 
 	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
+		lanIP, err := network.ResolveLocalIPv4()
+		if err == nil && lanIP != "" {
+			host = lanIP
+		} else {
+			host = "127.0.0.1"
+		}
 	}
 
 	return fmt.Sprintf("http://%s:%d", host, port)

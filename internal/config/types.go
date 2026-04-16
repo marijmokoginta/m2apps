@@ -7,6 +7,7 @@ type InstallConfig struct {
 	Auth         AuthConfig          `json:"auth"`
 	Channel      string              `json:"channel"`
 	Preset       string              `json:"preset"`
+	ServerMode   string              `json:"server_mode"`
 	Requirements []RequirementConfig `json:"requirements"`
 }
 
