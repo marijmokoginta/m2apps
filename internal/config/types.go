@@ -5,6 +5,7 @@ type InstallConfig struct {
 	Name         string              `json:"name"`
 	Source       SourceConfig        `json:"source"`
 	Auth         AuthConfig          `json:"auth"`
+	InstallMode  string              `json:"install_mode"`
 	Channel      string              `json:"channel"`
 	Preset       string              `json:"preset"`
 	ServerMode   string              `json:"server_mode"`

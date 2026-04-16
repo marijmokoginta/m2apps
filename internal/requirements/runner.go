@@ -12,6 +12,8 @@ func Run(reqs []Requirement) []Result {
 				Name:     normalizeName(r.Type),
 				Required: r.Version,
 				Success:  false,
+				Missing:  true,
+				Reason:   ReasonUnknown,
 				Message:  "unknown requirement type",
 			})
 			continue
@@ -32,10 +34,36 @@ func Run(reqs []Requirement) []Result {
 			}
 		}
 
+		res.Missing, res.Reason = classifyResult(res, err)
+
 		results = append(results, res)
 	}
 
 	return results
+}
+
+func classifyResult(res Result, checkErr error) (bool, string) {
+	if res.Success {
+		return false, ""
+	}
+
+	if strings.EqualFold(strings.TrimSpace(res.Found), "not found") {
+		return true, ReasonNotFound
+	}
+
+	errMsg := ""
+	if checkErr != nil {
+		errMsg = strings.ToLower(strings.TrimSpace(checkErr.Error()))
+	}
+	if errMsg == "not found" || strings.Contains(errMsg, "not found") {
+		return true, ReasonNotFound
+	}
+
+	if strings.TrimSpace(res.Found) != "" && strings.TrimSpace(res.Required) != "" {
+		return true, ReasonVersionMismatch
+	}
+
+	return true, ReasonUnknown
 }
 
 func normalizeName(name string) string {

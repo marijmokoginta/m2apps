@@ -6,6 +6,11 @@ import (
 	"strings"
 )
 
+const (
+	InstallModeAssisted = "assisted"
+	InstallModeManual   = "manual"
+)
+
 func (c *InstallConfig) Validate() error {
 	var errors []string
 
@@ -44,6 +49,15 @@ func (c *InstallConfig) Validate() error {
 	if strings.TrimSpace(c.Preset) == "" {
 		errors = append(errors, "preset is required")
 	}
+
+	installMode := strings.ToLower(strings.TrimSpace(c.InstallMode))
+	if installMode == "" {
+		installMode = InstallModeAssisted
+	}
+	if installMode != InstallModeAssisted && installMode != InstallModeManual {
+		errors = append(errors, "install_mode must be one of: assisted, manual")
+	}
+	c.InstallMode = installMode
 
 	if !hostmode.IsValid(c.ServerMode) {
 		errors = append(errors, "server_mode must be one of: localhost, lan")

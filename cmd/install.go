@@ -10,6 +10,7 @@ import (
 	"m2apps/internal/github"
 	"m2apps/internal/hostmode"
 	"m2apps/internal/installer"
+	"m2apps/internal/reqinstall"
 	"m2apps/internal/requirements"
 	_ "m2apps/internal/requirements/checkers"
 	"m2apps/internal/storage"
@@ -66,6 +67,7 @@ var installCmd = &cobra.Command{
 		fmt.Printf("%s %s\n", ui.Info("[INFO] App:"), cfg.Name)
 		fmt.Printf("%s %s\n", ui.Info("[INFO] Preset:"), cfg.Preset)
 		fmt.Printf("%s %s\n", ui.Info("[INFO] Channel:"), channel)
+		fmt.Printf("%s %s\n", ui.Info("[INFO] Install mode:"), cfg.InstallMode)
 		if isLaravelPresetName(cfg.Preset) {
 			fmt.Printf("%s %s\n", ui.Info("[INFO] Server mode:"), hostmode.Normalize(cfg.ServerMode))
 		}
@@ -81,9 +83,21 @@ var installCmd = &cobra.Command{
 		results := requirements.Run(reqs)
 		hasFailure := printRequirementResults(results)
 		if hasFailure {
+			results, err = reqinstall.ResolveAndInstall(cfg.InstallMode, reqs, results)
+			if err != nil {
+				fmt.Println()
+				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+				fmt.Println(ui.Error("[ERROR] Installation aborted."))
+				os.Exit(1)
+			}
+
 			fmt.Println()
-			fmt.Println(ui.Error("[ERROR] Installation aborted."))
-			os.Exit(1)
+			fmt.Println(ui.Info("[INFO] Requirement check after assisted install:"))
+			if printRequirementResults(results) {
+				fmt.Println()
+				fmt.Println(ui.Error("[ERROR] Installation aborted."))
+				os.Exit(1)
+			}
 		}
 
 		owner, repo, err := github.ParseRepo(cfg.Source.Repo)
