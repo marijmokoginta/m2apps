@@ -175,7 +175,7 @@ func newLaravelPresetHandler() presetHandler {
 			},
 			{Command: "php artisan optimize:clear"},
 		},
-		PostUpdate:     []string{"php artisan optimize:clear"},
+		PostUpdate:     []string{"php artisan storage:link", "php artisan optimize:clear"},
 		OnAppURLChange: []string{"npm run build"},
 		RestartTargets: []string{"queue", "scheduler"},
 	}

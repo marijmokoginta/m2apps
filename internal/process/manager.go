@@ -145,6 +145,47 @@ func (m *Manager) Start(appID string) (AppProcesses, error) {
 	}, nil
 }
 
+func (m *Manager) SyncAppURL(appID string) (bool, error) {
+	id := strings.TrimSpace(appID)
+	if id == "" {
+		return false, fmt.Errorf("app_id is required")
+	}
+
+	cfg, err := m.store.Load(id)
+	if err != nil {
+		return false, fmt.Errorf("failed to load app metadata: %w", err)
+	}
+
+	current, err := m.Status(id)
+	if err != nil {
+		return false, err
+	}
+
+	resolvedPort := m.resolveRuntimePort(cfg.Preset, current.Processes)
+	_, appURLHost, err := resolveAppHosts(cfg.Preset, cfg.ServerMode)
+	if err != nil {
+		return false, err
+	}
+
+	workDir := filepath.Clean(strings.TrimSpace(cfg.InstallPath))
+	appURL := fmt.Sprintf("http://%s:%d", appURLHost, resolvedPort)
+
+	changed, err := env.UpsertWithResult(workDir, map[string]string{
+		"APP_URL": appURL,
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to inject APP_URL into env: %w", err)
+	}
+
+	if changed {
+		if err := preset.RunOnAppURLChange(cfg.Preset, workDir); err != nil {
+			return true, fmt.Errorf("failed to run preset tasks on APP_URL change: %w", err)
+		}
+	}
+
+	return changed, nil
+}
+
 func (m *Manager) RestartNamed(appID string, processNames ...string) (AppProcesses, error) {
 	id := strings.TrimSpace(appID)
 	if id == "" {

@@ -158,15 +158,21 @@ func Update(appID string) error {
 		return fmt.Errorf("failed to run post-update preset tasks: %w", err)
 	}
 
+	processManager, err := process.NewManager()
+	if err != nil {
+		pm.Log(id, err.Error())
+		pm.Fail(id)
+		return fmt.Errorf("failed to initialize process manager: %w", err)
+	}
+
+	if _, err := processManager.SyncAppURL(config.AppID); err != nil {
+		pm.Log(id, err.Error())
+		pm.Fail(id)
+		return fmt.Errorf("failed to sync APP_URL after update: %w", err)
+	}
+
 	targets := preset.RestartProcessTargets(config.Preset)
 	if len(targets) > 0 {
-		processManager, err := process.NewManager()
-		if err != nil {
-			pm.Log(id, err.Error())
-			pm.Fail(id)
-			return fmt.Errorf("failed to initialize process manager: %w", err)
-		}
-
 		if _, err := processManager.RestartNamed(config.AppID, targets...); err != nil {
 			pm.Log(id, err.Error())
 			pm.Fail(id)
