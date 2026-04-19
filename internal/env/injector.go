@@ -17,6 +17,74 @@ func Upsert(installPath string, vars map[string]string) error {
 	return err
 }
 
+func DeleteKeys(installPath string, keys ...string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	targetFile, err := resolveExistingEnvFile(installPath)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(targetFile) == "" {
+		return nil
+	}
+
+	content, err := os.ReadFile(targetFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read env file %s: %w", targetFile, err)
+	}
+
+	keySet := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		keySet[key] = struct{}{}
+	}
+	if len(keySet) == 0 {
+		return nil
+	}
+
+	lines := strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			filtered = append(filtered, line)
+			continue
+		}
+
+		parts := strings.SplitN(trimmed, "=", 2)
+		if len(parts) == 0 {
+			filtered = append(filtered, line)
+			continue
+		}
+
+		key := strings.TrimSpace(parts[0])
+		if key == "" {
+			filtered = append(filtered, line)
+			continue
+		}
+
+		if _, shouldDelete := keySet[key]; shouldDelete {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+
+	updated := strings.Join(filtered, "\n")
+	updated = strings.TrimRight(updated, "\n") + "\n"
+	if err := os.WriteFile(targetFile, []byte(updated), 0o644); err != nil {
+		return fmt.Errorf("failed to write env file %s: %w", targetFile, err)
+	}
+	return nil
+}
+
 func UpsertWithResult(installPath string, vars map[string]string) (bool, error) {
 	targetFile, err := resolveTargetEnvFile(installPath)
 	if err != nil {
@@ -169,6 +237,23 @@ func resolveTargetEnvFile(installPath string) (string, error) {
 		return "", fmt.Errorf("failed to create env file %s: %w", target, err)
 	}
 	return target, nil
+}
+
+func resolveExistingEnvFile(installPath string) (string, error) {
+	candidates := []string{
+		filepath.Join(installPath, ".env"),
+		filepath.Join(installPath, ".env.local"),
+	}
+
+	for _, file := range candidates {
+		if _, err := os.Stat(file); err == nil {
+			return file, nil
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("failed to check env file %s: %w", file, err)
+		}
+	}
+
+	return "", nil
 }
 
 func readEnvKeys(path string) (map[string]struct{}, error) {

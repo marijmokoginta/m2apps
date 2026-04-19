@@ -175,6 +175,7 @@ func runInteractiveRoot(cmd *cobra.Command) error {
 				{Title: "Manage Application Process", Action: "process"},
 				{Title: "Delete Application", Action: "delete"},
 				{Title: "Switch Channel", Action: "channel"},
+				{Title: "Switch Server Mode", Action: "server_mode"},
 				{Title: "List Installed Applications", Action: "list"},
 				{Title: "Manage Daemon Service", Action: "daemon"},
 				{Title: "Help", Action: "help"},
@@ -210,6 +211,11 @@ func runInteractiveRoot(cmd *cobra.Command) error {
 			}
 		case "channel":
 			if err := runInteractiveChannelFlow(); err != nil {
+				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+				promptBackToMainMenu()
+			}
+		case "server_mode":
+			if err := runInteractiveServerModeFlow(); err != nil {
 				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 				promptBackToMainMenu()
 			}
@@ -422,6 +428,66 @@ func runInteractiveDeleteFlow() error {
 	fmt.Println(ui.Success(fmt.Sprintf("[OK] Application %s deleted", appID)))
 	promptBackToMainMenu()
 	return nil
+}
+
+func runInteractiveServerModeFlow() error {
+	for {
+		apps, err := loadInstalledApps()
+		if err != nil {
+			return err
+		}
+		if len(apps) == 0 {
+			fmt.Println(ui.Warning("[WARN] No installed applications found."))
+			promptBackToMainMenu()
+			return nil
+		}
+
+		appID, err := runInteractiveMenu("Select Application", withBackMenuItems(toAppMenuItems(apps), "Back"), nil)
+		if err != nil {
+			if errors.Is(err, ui.ErrMenuCancelled) {
+				return nil
+			}
+			return err
+		}
+		if appID == menuActionBack {
+			return nil
+		}
+
+		mode, err := runInteractiveMenu(
+			"Select Server Mode",
+			withBackMenuItems(
+				[]ui.MenuItem{
+					{Title: "localhost", Action: "localhost"},
+					{Title: "lan", Action: "lan"},
+				},
+				"Back",
+			),
+			nil,
+		)
+		if err != nil {
+			if errors.Is(err, ui.ErrMenuCancelled) {
+				continue
+			}
+			return err
+		}
+		if mode == menuActionBack {
+			continue
+		}
+
+		if !confirmAction(fmt.Sprintf("Switch app %s server mode to %s?", appID, mode)) {
+			fmt.Println(ui.Warning("[WARN] Server mode switch cancelled."))
+			promptBackToMainMenu()
+			return nil
+		}
+
+		message, err := runSetServerMode(appID, mode)
+		if err != nil {
+			return err
+		}
+		fmt.Println(ui.Success(message))
+		promptBackToMainMenu()
+		return nil
+	}
 }
 
 func runInteractiveProcessFlow() error {
@@ -663,7 +729,7 @@ func refreshInteractiveScreen() {
 
 func runInteractiveHelpScreen() {
 	fmt.Println(ui.Info("[INFO] Help"))
-	fmt.Println(ui.Info("[INFO] This CLI uses interactive menu for install, update, process, delete, channel, list, and daemon operations."))
+	fmt.Println(ui.Info("[INFO] This CLI uses interactive menu for install, update, process, delete, channel, server mode, list, and daemon operations."))
 	fmt.Println(ui.Info("[INFO] Full documentation: https://github.com/marijmokoginta/m2apps"))
 	fmt.Println(ui.Info(fmt.Sprintf("[INFO] Copyright (c) %d M2CodeApps", time.Now().Year())))
 }
