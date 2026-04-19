@@ -43,7 +43,8 @@ func relaunchElevated(args []string) error {
 
 	psArgs := make([]string, 0, len(args))
 	for _, arg := range args {
-		psArgs = append(psArgs, "'"+escapePowerShellSingle(arg)+"'")
+		escapedArg := strings.ReplaceAll(arg, `"`, `\"`)
+		psArgs = append(psArgs, `'"`+escapePowerShellSingle(escapedArg)+`"'`)
 	}
 
 	script := fmt.Sprintf(
