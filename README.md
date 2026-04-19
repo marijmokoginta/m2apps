@@ -44,7 +44,7 @@ Windows (PowerShell):
 
 Note:
 - the installer can run without Administrator privileges (user-level install)
-- if run as Administrator, it installs machine-wide in `C:\Program Files\M2Code`
+- if run as Administrator, it installs machine-wide in `C:\Program Files\M2Code\cli`
 
 Installer flow:
 

@@ -27,7 +27,7 @@ function Test-IsAdministrator {
     }
 }
 
-function Install-ToTarget($sourcePath, $targetDir, $scopeName) {
+function Install-ToTarget($sourcePath, $targetDir, $scopeName, $legacyDir) {
     $targetFile = Join-Path $targetDir "m2apps.exe"
     New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
     Copy-Item $sourcePath $targetFile -Force
@@ -38,10 +38,22 @@ function Install-ToTarget($sourcePath, $targetDir, $scopeName) {
         $currentPath = ""
     }
 
-    if ($currentPath -notlike "*$targetDir*") {
-        $updatedPath = if ($currentPath -eq "") { $targetDir } else { "$currentPath;$targetDir" }
-        [Environment]::SetEnvironmentVariable("Path", $updatedPath, $scope)
+    $segments = @()
+    if (-not [string]::IsNullOrWhiteSpace($currentPath)) {
+        $segments = $currentPath -split ";" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
     }
+    $normalized = New-Object System.Collections.Generic.List[string]
+    foreach ($segment in $segments) {
+        if ($segment.Equals($targetDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+        if (-not [string]::IsNullOrWhiteSpace($legacyDir) -and $segment.Equals($legacyDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+        $normalized.Add($segment)
+    }
+    $normalized.Add($targetDir)
+    [Environment]::SetEnvironmentVariable("Path", ($normalized -join ";"), $scope)
 
     return $targetFile
 }
@@ -76,7 +88,8 @@ try {
 
     $assetName = "m2apps-windows-$arch.zip"
     $apiUrl = "https://api.github.com/repos/$RepoOwner/$RepoName/releases/latest"
-    $machineTargetDir = "C:\Program Files\M2Code"
+    $legacyMachineTargetDir = "C:\Program Files\M2Code"
+    $machineTargetDir = "C:\Program Files\M2Code\cli"
     $userTargetDir = Join-Path $env:LOCALAPPDATA "M2Code\bin"
     $tempZip = Join-Path $env:TEMP "m2apps-windows.zip"
     $extractDir = Join-Path $env:TEMP "m2apps-extract"
@@ -123,12 +136,17 @@ try {
         }
 
         Info "Installing to $machineTargetDir (machine scope)..."
-        $installedPath = Install-ToTarget $tempFile $machineTargetDir "Machine"
+        $installedPath = Install-ToTarget $tempFile $machineTargetDir "Machine" $legacyMachineTargetDir
+
+        $legacyBinary = Join-Path $legacyMachineTargetDir "m2apps.exe"
+        if ($legacyBinary -ne $installedPath -and (Test-Path $legacyBinary)) {
+            Remove-Item $legacyBinary -Force -ErrorAction SilentlyContinue
+        }
         Info "Machine-level installation completed."
     }
     else {
         Info "Installing to $userTargetDir (user scope)..."
-        $installedPath = Install-ToTarget $tempFile $userTargetDir "User"
+        $installedPath = Install-ToTarget $tempFile $userTargetDir "User" $null
         Info "User-level installation completed."
     }
 

@@ -12,6 +12,7 @@ import (
 var (
 	internalSelfUpdateTarget    string
 	internalSelfUpdateNewBinary string
+	internalSelfUpdateSource    string
 	internalSelfUpdateParentPID int
 	internalSelfUpdateRestart   bool
 	internalSelfUpdateDaemon    bool
@@ -34,6 +35,7 @@ var internalSelfUpdateCmd = &cobra.Command{
 		if err := selfupdate.RunInternalSelfUpdate(
 			internalSelfUpdateTarget,
 			internalSelfUpdateNewBinary,
+			internalSelfUpdateSource,
 			internalSelfUpdateParentPID,
 			internalSelfUpdateRestart,
 			internalSelfUpdateDaemon,
@@ -70,6 +72,7 @@ var internalDaemonActionCmd = &cobra.Command{
 func init() {
 	internalSelfUpdateCmd.Flags().StringVar(&internalSelfUpdateTarget, "target", "", "target executable path")
 	internalSelfUpdateCmd.Flags().StringVar(&internalSelfUpdateNewBinary, "new", "", "new executable path")
+	internalSelfUpdateCmd.Flags().StringVar(&internalSelfUpdateSource, "source", "", "source executable path before migration")
 	internalSelfUpdateCmd.Flags().IntVar(&internalSelfUpdateParentPID, "parent-pid", 0, "parent process PID")
 	internalSelfUpdateCmd.Flags().BoolVar(&internalSelfUpdateRestart, "restart", true, "restart application after replacing binary")
 	internalSelfUpdateCmd.Flags().BoolVar(&internalSelfUpdateDaemon, "restart-daemon", false, "restart daemon service after replacing binary")

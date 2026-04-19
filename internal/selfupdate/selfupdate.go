@@ -162,11 +162,16 @@ func Update(currentVersion string) error {
 	if err != nil {
 		return fmt.Errorf("failed to resolve executable path: %w", err)
 	}
+	targetPath := execPath
+	sourcePath := execPath
+	if runtime.GOOS == "windows" {
+		targetPath = resolveWindowsCanonicalBinaryPath(execPath)
+	}
 
 	if runtime.GOOS == "windows" {
 		statusFile := filepath.Join(os.TempDir(), fmt.Sprintf("m2apps_selfupdate_status_%d.json", time.Now().UnixNano()))
 		_ = os.Remove(statusFile)
-		if err := launchWindowsUpdater(execPath, newBinaryPath, daemonWasRunning, statusFile); err != nil {
+		if err := launchWindowsUpdater(targetPath, newBinaryPath, sourcePath, daemonWasRunning, statusFile); err != nil {
 			stopInstallSpinner(ui.Error(fmt.Sprintf("[FAIL] Install update failed: %v", err)))
 			return err
 		}
@@ -190,28 +195,35 @@ func Update(currentVersion string) error {
 		return ErrRestartScheduled
 	}
 
-	if err := replaceBinary(execPath, newBinaryPath); err != nil {
+	if err := replaceBinary(targetPath, newBinaryPath); err != nil {
 		if isPermissionDeniedError(err) {
 			stopInstallSpinner(ui.Info("[INFO] Requesting supervisor permission to apply self-update..."))
-			if elevateErr := replaceBinaryElevated(execPath, newBinaryPath); elevateErr != nil {
+			if elevateErr := replaceBinaryElevated(targetPath, newBinaryPath, sourcePath); elevateErr != nil {
 				stopInstallSpinner(ui.Error(fmt.Sprintf("[FAIL] Install update failed: %v", elevateErr)))
 				return elevateErr
 			}
 			stopInstallSpinner(ui.Success("[OK] Install update completed"))
 			_ = SaveSkippedVersion("")
+			if runtime.GOOS == "windows" {
+				_ = finalizeWindowsBinaryMigration(targetPath, sourcePath)
+			}
 			return nil
 		}
 		stopInstallSpinner(ui.Error(fmt.Sprintf("[FAIL] Install update failed: %v", err)))
 		return err
+	}
+	if runtime.GOOS == "windows" {
+		_ = finalizeWindowsBinaryMigration(targetPath, sourcePath)
 	}
 	stopInstallSpinner(ui.Success("[OK] Install update completed"))
 	_ = SaveSkippedVersion("")
 	return nil
 }
 
-func RunInternalSelfUpdate(targetPath, newBinaryPath string, parentPID int, restart bool, restartDaemon bool, statusFile string) error {
+func RunInternalSelfUpdate(targetPath, newBinaryPath, sourcePath string, parentPID int, restart bool, restartDaemon bool, statusFile string) error {
 	target := filepath.Clean(strings.TrimSpace(targetPath))
 	newBin := filepath.Clean(strings.TrimSpace(newBinaryPath))
+	source := filepath.Clean(strings.TrimSpace(sourcePath))
 	writeStatus := func(success bool, message string) {
 		_ = writeWindowsUpdaterStatus(statusFile, windowsUpdaterStatus{
 			Success: success,
@@ -242,6 +254,7 @@ func RunInternalSelfUpdate(targetPath, newBinaryPath string, parentPID int, rest
 				"internal", "self-update",
 				"--target", target,
 				"--new", newBin,
+				"--source", source,
 				"--parent-pid", "0",
 				"--restart", strconv.FormatBool(restart),
 				"--restart-daemon", strconv.FormatBool(restartDaemon),
@@ -257,6 +270,12 @@ func RunInternalSelfUpdate(targetPath, newBinaryPath string, parentPID int, rest
 		}
 		writeStatus(false, err.Error())
 		return err
+	}
+	if runtime.GOOS == "windows" {
+		if err := finalizeWindowsBinaryMigration(target, source); err != nil {
+			writeStatus(false, fmt.Sprintf("updated binary but migration finalize failed: %v", err))
+			return fmt.Errorf("updated binary but migration finalize failed: %w", err)
+		}
 	}
 
 	if restartDaemon {
@@ -467,9 +486,13 @@ func writeBinaryFile(path string, src io.Reader, mode os.FileMode) error {
 	return nil
 }
 
-func launchWindowsUpdater(targetPath, newBinaryPath string, restartDaemon bool, statusFile string) error {
+func launchWindowsUpdater(targetPath, newBinaryPath, sourcePath string, restartDaemon bool, statusFile string) error {
 	helperPath := filepath.Join(os.TempDir(), fmt.Sprintf("m2apps_updater_%d.exe", time.Now().UnixNano()))
-	if err := copyFile(targetPath, helperPath, 0o755); err != nil {
+	helperSource := strings.TrimSpace(sourcePath)
+	if helperSource == "" {
+		helperSource = strings.TrimSpace(targetPath)
+	}
+	if err := copyFile(helperSource, helperPath, 0o755); err != nil {
 		return fmt.Errorf("failed to prepare windows updater helper: %w", err)
 	}
 
@@ -479,6 +502,7 @@ func launchWindowsUpdater(targetPath, newBinaryPath string, restartDaemon bool, 
 		"self-update",
 		"--target", targetPath,
 		"--new", newBinaryPath,
+		"--source", sourcePath,
 		"--parent-pid", strconv.Itoa(os.Getpid()),
 		"--restart", "true",
 		"--restart-daemon", strconv.FormatBool(restartDaemon),
@@ -549,7 +573,22 @@ func replaceBinary(targetPath, newBinaryPath string) error {
 	backup := target + "_old"
 
 	if _, err := os.Stat(target); err != nil {
-		return fmt.Errorf("current binary not found: %w", err)
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("failed to access current binary: %w", err)
+		}
+
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fmt.Errorf("failed to prepare target directory: %w", err)
+		}
+		if err := moveFile(newBin, target); err != nil {
+			return fmt.Errorf("failed to place new binary: %w", err)
+		}
+		if runtime.GOOS != "windows" {
+			if err := os.Chmod(target, 0o755); err != nil {
+				return fmt.Errorf("binary replaced but failed to set executable permission: %w", err)
+			}
+		}
+		return nil
 	}
 
 	if err := os.Remove(backup); err != nil && !os.IsNotExist(err) {
@@ -674,7 +713,7 @@ func isPIDRunning(pid int) bool {
 	return proc.Signal(syscall.Signal(0)) == nil
 }
 
-func replaceBinaryElevated(targetPath, newBinaryPath string) error {
+func replaceBinaryElevated(targetPath, newBinaryPath, sourcePath string) error {
 	if privilege.IsElevated() {
 		return fmt.Errorf("self-update needs write access but elevation still unavailable")
 	}
@@ -683,6 +722,7 @@ func replaceBinaryElevated(targetPath, newBinaryPath string) error {
 		"internal", "self-update",
 		"--target", targetPath,
 		"--new", newBinaryPath,
+		"--source", sourcePath,
 		"--parent-pid", "0",
 		"--restart", "false",
 	}
@@ -691,6 +731,103 @@ func replaceBinaryElevated(targetPath, newBinaryPath string) error {
 		return fmt.Errorf("failed to apply self-update with supervisor permission: %w", err)
 	}
 	return nil
+}
+
+func resolveWindowsCanonicalBinaryPath(currentPath string) string {
+	if runtime.GOOS != "windows" {
+		return currentPath
+	}
+
+	normalizedCurrent := strings.ToLower(filepath.Clean(strings.TrimSpace(currentPath)))
+	legacy := strings.ToLower(filepath.Clean(`C:\Program Files\M2Code\m2apps.exe`))
+	if normalizedCurrent == legacy {
+		return filepath.Clean(`C:\Program Files\M2Code\cli\m2apps.exe`)
+	}
+	return currentPath
+}
+
+func finalizeWindowsBinaryMigration(targetPath, sourcePath string) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+
+	target := filepath.Clean(strings.TrimSpace(targetPath))
+	source := filepath.Clean(strings.TrimSpace(sourcePath))
+	if target == "" {
+		return nil
+	}
+
+	serviceErr := syncWindowsServiceBinaryPath(target)
+	pathErr := syncWindowsMachinePath(filepath.Dir(target), filepath.Clean(`C:\Program Files\M2Code`))
+	if serviceErr != nil || pathErr != nil {
+		return errors.Join(serviceErr, pathErr)
+	}
+
+	if source != "" && !strings.EqualFold(target, source) {
+		if err := os.Remove(source); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove legacy binary after migration: %w", err)
+		}
+	}
+	return nil
+}
+
+func syncWindowsServiceBinaryPath(binaryPath string) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	target := strings.TrimSpace(binaryPath)
+	if target == "" {
+		return nil
+	}
+
+	binPathValue := fmt.Sprintf("\"%s\" daemon run", target)
+	out, err := system.CombinedOutput("sc", "config", "M2Apps", "binPath=", binPathValue)
+	if err != nil {
+		text := strings.ToLower(strings.TrimSpace(string(out)))
+		if strings.Contains(text, "failed 1060") || strings.Contains(text, "does not exist") {
+			return nil
+		}
+		return fmt.Errorf("failed to update windows service binary path: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func syncWindowsMachinePath(newDir, legacyDir string) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+
+	nd := strings.TrimSpace(newDir)
+	ld := strings.TrimSpace(legacyDir)
+	if nd == "" {
+		return nil
+	}
+
+	script := fmt.Sprintf(`
+$target=[EnvironmentVariableTarget]::Machine
+$newDir='%s'
+$legacyDir='%s'
+$raw=[Environment]::GetEnvironmentVariable('Path',$target)
+if([string]::IsNullOrWhiteSpace($raw)){ $raw='' }
+$parts=$raw -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
+$filtered=@()
+foreach($p in $parts){
+  if($p.ToLower() -eq $newDir.ToLower()){ continue }
+  if($legacyDir -ne '' -and $p.ToLower() -eq $legacyDir.ToLower()){ continue }
+  $filtered += $p
+}
+$filtered += $newDir
+[Environment]::SetEnvironmentVariable('Path', ($filtered -join ';'), $target)
+`, escapePowerShellSingle(nd), escapePowerShellSingle(ld))
+
+	if _, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func escapePowerShellSingle(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
 }
 
 func isPermissionDeniedError(err error) bool {
