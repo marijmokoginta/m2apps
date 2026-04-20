@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"m2apps/internal/config"
 	"m2apps/internal/daemon"
+	"m2apps/internal/dbsetup"
 	"m2apps/internal/downloader"
 	"m2apps/internal/env"
 	"m2apps/internal/github"
 	"m2apps/internal/hostmode"
 	"m2apps/internal/installer"
+	"m2apps/internal/preset"
 	"m2apps/internal/reqinstall"
 	"m2apps/internal/requirements"
 	_ "m2apps/internal/requirements/checkers"
@@ -167,6 +169,30 @@ var installCmd = &cobra.Command{
 			TargetDir: cwd,
 			Preset:    cfg.Preset,
 			AppID:     cfg.AppID,
+		}
+
+		if preset.RequiresDBSetup(cfg.Preset) {
+			installCtx.DBSetupFunc = func(workDir string) error {
+				fmt.Println()
+				fmt.Println(ui.Info("[INFO] Database Setup Required"))
+				fmt.Println(ui.Info("[INFO] Please provide database configuration below."))
+				fmt.Println()
+
+				defaults := preset.ReadDBDefaults(cfg.Preset, workDir)
+				dbConfig, err := dbsetup.PromptDBConfig(defaults)
+				if err != nil {
+					return err
+				}
+
+				fmt.Println()
+				fmt.Println(ui.Info("[INFO] Saving database configuration..."))
+				if err := env.Upsert(workDir, dbsetup.ToEnvMap(dbConfig)); err != nil {
+					return fmt.Errorf("failed to save database config: %w", err)
+				}
+				fmt.Println(ui.Success("[OK] Database configuration saved."))
+				fmt.Println()
+				return nil
+			}
 		}
 
 		if err := installer.Install(installCtx); err != nil {

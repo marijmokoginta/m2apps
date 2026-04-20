@@ -20,6 +20,12 @@ type InstallContext struct {
 	AppID           string
 	ProgressManager *progress.Manager
 	ProgressAppID   string
+
+	// DBSetupFunc is an optional hook called after files are extracted and
+	// before preset commands run. Use it to inject DB configuration into the
+	// .env so that commands like `php artisan migrate` can succeed.
+	// workDir is the temporary extraction directory.
+	DBSetupFunc func(workDir string) error
 }
 
 func Install(ctx InstallContext) error {
@@ -54,6 +60,15 @@ func Install(ctx InstallContext) error {
 		return fmt.Errorf("failed to extract zip: %w", err)
 	}
 	fmt.Println(ui.Success("[OK] Files extracted"))
+
+	// Run DB setup hook (if provided) before preset commands so that
+	// commands like `php artisan migrate` have a valid DB config.
+	if ctx.DBSetupFunc != nil {
+		reportProgress(ctx, "install", "database setup", 74, "Database setup")
+		if err := ctx.DBSetupFunc(tempDir); err != nil {
+			return fmt.Errorf("database setup failed: %w", err)
+		}
+	}
 
 	reportProgress(ctx, "install", "running preset", 78, "Running preset")
 	fmt.Println(ui.Info("[INFO] Running installation preset..."))

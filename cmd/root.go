@@ -6,6 +6,9 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"m2apps/internal/dbsetup"
+	"m2apps/internal/env"
+	"m2apps/internal/preset"
 	"m2apps/internal/selfupdate"
 	"m2apps/internal/storage"
 	"m2apps/internal/system"
@@ -20,7 +23,7 @@ import (
 )
 
 const colorReset = "\033[0m"
-const appVersion = "v1.2.5"
+const appVersion = "v1.2.6"
 
 func rgb(r, g, b int) string {
 	return fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
@@ -172,6 +175,7 @@ func runInteractiveRoot(cmd *cobra.Command) error {
 			[]ui.MenuItem{
 				{Title: "Install Application", Action: "install"},
 				{Title: "Update Application", Action: "update"},
+				{Title: "Configure Database", Action: "db_config"},
 				{Title: "Manage Application Process", Action: "process"},
 				{Title: "Delete Application", Action: "delete"},
 				{Title: "Switch Channel", Action: "channel"},
@@ -196,6 +200,11 @@ func runInteractiveRoot(cmd *cobra.Command) error {
 			promptBackToMainMenu()
 		case "update":
 			if err := runInteractiveUpdateFlow(); err != nil {
+				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
+				promptBackToMainMenu()
+			}
+		case "db_config":
+			if err := runInteractiveDBConfigFlow(); err != nil {
 				fmt.Println(ui.Error(fmt.Sprintf("[ERROR] %v", err)))
 				promptBackToMainMenu()
 			}
@@ -543,6 +552,88 @@ func runInteractiveProcessFlow() error {
 		promptBackToMainMenu()
 		return nil
 	}
+}
+
+func runInteractiveDBConfigFlow() error {
+	apps, err := loadInstalledApps()
+	if err != nil {
+		return err
+	}
+	if len(apps) == 0 {
+		fmt.Println(ui.Warning("[WARN] No installed applications found."))
+		promptBackToMainMenu()
+		return nil
+	}
+
+	appID, err := runInteractiveMenu("Select Application to Configure Database", withBackMenuItems(toAppMenuItems(apps), "Back"), nil)
+	if err != nil {
+		if errors.Is(err, ui.ErrMenuCancelled) {
+			return nil
+		}
+		return err
+	}
+	if appID == menuActionBack {
+		return nil
+	}
+
+	// 1. Get current app metadata to know preset and install path
+	store, err := storage.New()
+	if err != nil {
+		return err
+	}
+	cfg, err := store.Load(appID)
+	if err != nil {
+		return fmt.Errorf("failed to load app metadata: %w", err)
+	}
+
+	// 2. Read current DB values from .env
+	currentEnv, err := env.ReadValues(cfg.InstallPath, dbsetup.EnvKeys())
+	if err != nil {
+		fmt.Println(ui.Warning(fmt.Sprintf("[WARN] Failed to read current .env: %v", err)))
+		currentEnv = make(map[string]string)
+	}
+
+	// 3. Get preset defaults as secondary fallback
+	presetDefaults := preset.ReadDBDefaults(cfg.Preset, cfg.InstallPath)
+
+	// 4. Merge current values into preset defaults (current values win)
+	defaults := dbsetup.DBConfigFromEnvMap(currentEnv)
+	if defaults.Driver == "" {
+		defaults.Driver = presetDefaults.Driver
+	}
+	if defaults.Host == "" {
+		defaults.Host = presetDefaults.Host
+	}
+	if defaults.Port == "" {
+		defaults.Port = presetDefaults.Port
+	}
+	if defaults.DBName == "" {
+		defaults.DBName = presetDefaults.DBName
+	}
+	if defaults.Username == "" {
+		defaults.Username = presetDefaults.Username
+	}
+
+	// 5. Prompt user
+	fmt.Println()
+	fmt.Println(ui.Info(fmt.Sprintf("[INFO] Configuring database for %s...", appID)))
+	dbConfig, err := dbsetup.PromptDBConfig(defaults)
+	if err != nil {
+		return err
+	}
+
+	// 6. Save back to .env
+	fmt.Println()
+	fmt.Println(ui.Info("[INFO] Saving configuration..."))
+	if err := env.Upsert(cfg.InstallPath, dbsetup.ToEnvMap(dbConfig)); err != nil {
+		return fmt.Errorf("failed to save database config: %w", err)
+	}
+
+	fmt.Println(ui.Success("[OK] Database configuration updated successfully."))
+	fmt.Println(ui.Info("[INFO] Please restart the application for changes to take effect."))
+
+	promptBackToMainMenu()
+	return nil
 }
 
 func runInteractiveDaemonFlow() error {

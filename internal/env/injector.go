@@ -276,3 +276,73 @@ func readEnvKeys(path string) (map[string]struct{}, error) {
 	}
 	return keys, nil
 }
+
+// ReadValues reads specific key values from the .env file in the given install path.
+// Keys not found in the .env are returned as empty strings (not an error).
+func ReadValues(installPath string, keys []string) (map[string]string, error) {
+	if len(keys) == 0 {
+		return map[string]string{}, nil
+	}
+
+	targetFile, err := resolveExistingEnvFile(installPath)
+	if err != nil {
+		return nil, err
+	}
+	if targetFile == "" {
+		result := make(map[string]string, len(keys))
+		for _, k := range keys {
+			result[strings.TrimSpace(k)] = ""
+		}
+		return result, nil
+	}
+
+	content, err := os.ReadFile(targetFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			result := make(map[string]string, len(keys))
+			for _, k := range keys {
+				result[strings.TrimSpace(k)] = ""
+			}
+			return result, nil
+		}
+		return nil, fmt.Errorf("failed to read env file %s: %w", targetFile, err)
+	}
+
+	keySet := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		k = strings.TrimSpace(k)
+		if k != "" {
+			keySet[k] = struct{}{}
+		}
+	}
+
+	result := make(map[string]string, len(keys))
+	for _, line := range strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		parts := strings.SplitN(trimmed, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		if _, wanted := keySet[key]; !wanted {
+			continue
+		}
+		result[key] = strings.TrimSpace(parts[1])
+	}
+
+	// Fill missing keys with empty string
+	for _, k := range keys {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		if _, found := result[k]; !found {
+			result[k] = ""
+		}
+	}
+
+	return result, nil
+}
