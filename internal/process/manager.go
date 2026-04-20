@@ -75,6 +75,10 @@ func (m *Manager) Start(appID string) (AppProcesses, error) {
 		return AppProcesses{}, err
 	}
 
+	if err := maybeInjectSanctumStatefulDomains(workDir, cfg.Preset, resolvedPort); err != nil {
+		return AppProcesses{}, err
+	}
+
 	logFile, err := openAppLogFile(id)
 	if err != nil {
 		return AppProcesses{}, err
@@ -184,6 +188,94 @@ func (m *Manager) SyncAppURL(appID string) (bool, error) {
 	}
 
 	return changed, nil
+}
+
+func maybeInjectSanctumStatefulDomains(workDir string, presetName string, port int) error {
+	if !isLaravelPresetName(presetName) {
+		return nil
+	}
+
+	ip, err := network.ResolveLocalIPv4()
+	if err != nil || strings.TrimSpace(ip) == "" {
+		// LAN IP may not exist (offline / no active interface). Don't block app start.
+		return nil
+	}
+
+	additions := []string{ip}
+	if port > 0 {
+		additions = append(additions, fmt.Sprintf("%s:%d", ip, port))
+	}
+
+	updated, err := appendEnvCSVUnique(workDir, "SANCTUM_STATEFUL_DOMAINS", additions...)
+	if err != nil {
+		return fmt.Errorf("failed to inject SANCTUM_STATEFUL_DOMAINS: %w", err)
+	}
+	_ = updated
+	return nil
+}
+
+func appendEnvCSVUnique(workDir string, key string, additions ...string) (bool, error) {
+	key = strings.TrimSpace(key)
+	if key == "" || len(additions) == 0 {
+		return false, nil
+	}
+
+	current, err := env.ReadValues(workDir, []string{key})
+	if err != nil {
+		return false, err
+	}
+
+	raw := strings.TrimSpace(current[key])
+	quote := byte(0)
+	if len(raw) >= 2 && ((raw[0] == '"' && raw[len(raw)-1] == '"') || (raw[0] == '\'' && raw[len(raw)-1] == '\'')) {
+		quote = raw[0]
+		raw = raw[1 : len(raw)-1]
+		raw = strings.TrimSpace(raw)
+	}
+
+	items := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, part := range strings.Split(raw, ",") {
+		item := strings.TrimSpace(part)
+		if item == "" {
+			continue
+		}
+		lower := strings.ToLower(item)
+		if _, ok := seen[lower]; ok {
+			continue
+		}
+		seen[lower] = struct{}{}
+		items = append(items, item)
+	}
+
+	changed := false
+	for _, add := range additions {
+		add = strings.TrimSpace(add)
+		if add == "" {
+			continue
+		}
+		lower := strings.ToLower(add)
+		if _, ok := seen[lower]; ok {
+			continue
+		}
+		seen[lower] = struct{}{}
+		items = append(items, add)
+		changed = true
+	}
+
+	if !changed {
+		return false, nil
+	}
+
+	value := strings.Join(items, ", ")
+	if quote != 0 {
+		value = string(quote) + value + string(quote)
+	}
+
+	if err := env.Upsert(workDir, map[string]string{key: value}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (m *Manager) RestartNamed(appID string, processNames ...string) (AppProcesses, error) {

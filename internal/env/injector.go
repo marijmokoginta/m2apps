@@ -233,6 +233,16 @@ func resolveTargetEnvFile(installPath string) (string, error) {
 	}
 
 	target := filepath.Join(installPath, ".env")
+	examplePath := filepath.Join(installPath, ".env.example")
+	if content, err := os.ReadFile(examplePath); err == nil {
+		if err := os.WriteFile(target, content, 0o644); err != nil {
+			return "", fmt.Errorf("failed to create env file %s from .env.example: %w", target, err)
+		}
+		return target, nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("failed to read env example file %s: %w", examplePath, err)
+	}
+
 	if err := os.WriteFile(target, []byte(""), 0o644); err != nil {
 		return "", fmt.Errorf("failed to create env file %s: %w", target, err)
 	}

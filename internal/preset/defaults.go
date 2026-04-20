@@ -18,6 +18,15 @@ func RequiresDBSetup(preset string) bool {
 	return dbRequiredPresets[normalizePreset(preset)]
 }
 
+func IsLaravelPreset(preset string) bool {
+	switch normalizePreset(preset) {
+	case "laravel", "laravel-inertia":
+		return true
+	default:
+		return false
+	}
+}
+
 // ReadDBDefaults reads the default database configuration for the given preset
 // by parsing .env.example (or similar reference files) in workDir.
 // Returns a DBConfig populated with whatever defaults can be found; missing

@@ -178,6 +178,12 @@ var installCmd = &cobra.Command{
 				fmt.Println(ui.Info("[INFO] Please provide database configuration below."))
 				fmt.Println()
 
+				if preset.IsLaravelPreset(cfg.Preset) {
+					if err := promptAndSaveAppEnv(workDir); err != nil {
+						return err
+					}
+				}
+
 				defaults := preset.ReadDBDefaults(cfg.Preset, workDir)
 				dbConfig, err := dbsetup.PromptDBConfig(defaults)
 				if err != nil {
@@ -395,6 +401,66 @@ func isLaravelPresetName(name string) bool {
 	default:
 		return false
 	}
+}
+
+func promptAndSaveAppEnv(workDir string) error {
+	current, err := env.ReadValues(workDir, []string{"APP_ENV"})
+	if err != nil {
+		return err
+	}
+
+	defaultEnv := strings.ToLower(strings.TrimSpace(current["APP_ENV"]))
+	if defaultEnv == "" {
+		defaultEnv = "local"
+	}
+
+	chosen := defaultEnv
+	if isInteractiveTerminalForInstall() {
+		fmt.Println(ui.Info("[INFO] Application Environment"))
+		fmt.Println(ui.Info("[INFO] Select APP_ENV for this application."))
+		fmt.Println()
+
+		selected, menuErr := ui.RunMenu(
+			"Select APP_ENV",
+			[]ui.MenuItem{
+				{Title: "local", Action: "local"},
+				{Title: "testing", Action: "testing"},
+				{Title: "staging", Action: "staging"},
+				{Title: "production", Action: "production"},
+			},
+			nil,
+		)
+		if menuErr == nil && strings.TrimSpace(selected) != "" {
+			chosen = strings.ToLower(strings.TrimSpace(selected))
+		}
+		fmt.Println()
+	}
+
+	switch chosen {
+	case "local", "testing", "staging", "production":
+	default:
+		chosen = "local"
+	}
+
+	fmt.Println(ui.Info(fmt.Sprintf("[INFO] Saving APP_ENV=%s...", chosen)))
+	if err := env.Upsert(workDir, map[string]string{"APP_ENV": chosen}); err != nil {
+		return fmt.Errorf("failed to save APP_ENV: %w", err)
+	}
+	fmt.Println(ui.Success("[OK] APP_ENV saved."))
+	fmt.Println()
+	return nil
+}
+
+func isInteractiveTerminalForInstall() bool {
+	infoIn, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	infoOut, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return (infoIn.Mode()&os.ModeCharDevice) != 0 && (infoOut.Mode()&os.ModeCharDevice) != 0
 }
 
 func isValidZipArchive(path string) (bool, error) {
