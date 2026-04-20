@@ -76,9 +76,9 @@ func Update(appID string) error {
 		return nil
 	}
 
-	asset, err := github.FindAsset(target, config.Asset)
+	asset, err := github.FindAssetByVersionedName(target, config.Asset)
 	if err != nil {
-		pm.Log(id, "Asset not found in selected release")
+		pm.Log(id, err.Error())
 		pm.Fail(id)
 		return fmt.Errorf("Asset not found in selected release")
 	}

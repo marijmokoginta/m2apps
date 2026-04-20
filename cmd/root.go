@@ -23,7 +23,7 @@ import (
 )
 
 const colorReset = "\033[0m"
-const appVersion = "v1.2.9"
+const appVersion = "v1.3.0"
 
 func rgb(r, g, b int) string {
 	return fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
