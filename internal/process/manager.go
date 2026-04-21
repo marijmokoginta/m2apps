@@ -386,6 +386,7 @@ func (m *Manager) Stop(appID string) (AppProcesses, error) {
 
 		if current.PID <= 0 {
 			current.Status = "stopped"
+			current.PID = 0
 			updated = append(updated, current)
 			continue
 		}
@@ -400,6 +401,8 @@ func (m *Manager) Stop(appID string) (AppProcesses, error) {
 			current.Status = "running"
 		} else {
 			current.Status = "stopped"
+			// Avoid PID reuse causing us to kill the wrong process later.
+			current.PID = 0
 		}
 
 		updated = append(updated, current)

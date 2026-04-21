@@ -2,6 +2,7 @@ package updater
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"m2apps/internal/downloader"
 	"m2apps/internal/github"
@@ -142,6 +143,23 @@ func Update(appID string) error {
 		pm.Fail(id)
 		return fmt.Errorf("failed to initialize process manager: %w", err)
 	}
+	var runningBefore []string
+	updateSucceeded := false
+	stoppedForUpdate := false
+	defer func() {
+		if updateSucceeded || !stoppedForUpdate || len(runningBefore) == 0 {
+			return
+		}
+
+		pm.Log(id, fmt.Sprintf("Update failed, restoring processes: %s", strings.Join(runningBefore, ", ")))
+		if _, err := processManager.RestartNamed(config.AppID, runningBefore...); err != nil {
+			pm.Log(id, fmt.Sprintf("Failed to restore processes after update failure: %v", err))
+			fmt.Println(ui.Warning(fmt.Sprintf("[WARN] Failed to restore app processes: %v", err)))
+		} else {
+			pm.Log(id, "Processes restored after update failure")
+			fmt.Println(ui.Warning("[WARN] Update failed, but app processes were restored."))
+		}
+	}()
 
 	candidateDir := filepath.Join(stageRoot, "candidate")
 	if err := os.RemoveAll(candidateDir); err != nil && !os.IsNotExist(err) {
@@ -172,7 +190,7 @@ func Update(appID string) error {
 		pm.Fail(id)
 		return fmt.Errorf("failed to check app process status before update: %w", err)
 	}
-	runningBefore := runningProcessNames(beforeStatus.Processes)
+	runningBefore = runningProcessNames(beforeStatus.Processes)
 
 	if len(runningBefore) > 0 {
 		pm.Update(id, "preflight", "stopping app processes", 85)
@@ -183,6 +201,7 @@ func Update(appID string) error {
 			pm.Fail(id)
 			return fmt.Errorf("failed to stop app processes before applying update: %w", err)
 		}
+		stoppedForUpdate = true
 		if runtime.GOOS == "windows" {
 			time.Sleep(700 * time.Millisecond)
 		}
@@ -230,6 +249,7 @@ func Update(appID string) error {
 	pm.Log(id, "Update completed")
 	pm.Complete(id)
 	fmt.Println(ui.Success("[OK] Update completed"))
+	updateSucceeded = true
 	return nil
 }
 
@@ -408,11 +428,13 @@ func renameWithRetry(from, to string) error {
 	// Windows may keep handles for a short time after process termination or due to AV scans.
 	const attempts = 8
 	backoff := 200 * time.Millisecond
+	var lastErr error
 	for i := 0; i < attempts; i++ {
 		err := os.Rename(src, dst)
 		if err == nil {
 			return nil
 		}
+		lastErr = err
 		if !isWindowsDirBusyError(err) {
 			return err
 		}
@@ -422,7 +444,10 @@ func renameWithRetry(from, to string) error {
 		}
 	}
 
-	return fmt.Errorf("rename failed after retries (source=%s, target=%s)", src, dst)
+	if lastErr == nil {
+		lastErr = fmt.Errorf("unknown windows file lock")
+	}
+	return fmt.Errorf("rename failed after retries (source=%s, target=%s): %w", src, dst, lastErr)
 }
 
 func isWindowsDirBusyError(err error) bool {
@@ -431,7 +456,22 @@ func isWindowsDirBusyError(err error) bool {
 	}
 
 	text := strings.ToLower(strings.TrimSpace(err.Error()))
-	if text == "" {
+
+	if matchesWindowsLockText(text) {
+		return true
+	}
+
+	for unwrapped := errors.Unwrap(err); unwrapped != nil; unwrapped = errors.Unwrap(unwrapped) {
+		if matchesWindowsLockText(strings.ToLower(strings.TrimSpace(unwrapped.Error()))) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func matchesWindowsLockText(text string) bool {
+	if strings.TrimSpace(text) == "" {
 		return false
 	}
 
