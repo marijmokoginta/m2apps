@@ -2,6 +2,7 @@ package updater
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"m2apps/internal/downloader"
 	"m2apps/internal/github"
@@ -14,6 +15,7 @@ import (
 	"m2apps/internal/ui"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -135,6 +137,30 @@ func Update(appID string) error {
 	pm.Update(id, "install", "running installer", 65)
 	pm.Log(id, "Update package downloaded")
 
+	processManager, err := process.NewManager()
+	if err != nil {
+		pm.Log(id, err.Error())
+		pm.Fail(id)
+		return fmt.Errorf("failed to initialize process manager: %w", err)
+	}
+	var runningBefore []string
+	updateSucceeded := false
+	stoppedForUpdate := false
+	defer func() {
+		if updateSucceeded || !stoppedForUpdate || len(runningBefore) == 0 {
+			return
+		}
+
+		pm.Log(id, fmt.Sprintf("Update failed, restoring processes: %s", strings.Join(runningBefore, ", ")))
+		if _, err := processManager.RestartNamed(config.AppID, runningBefore...); err != nil {
+			pm.Log(id, fmt.Sprintf("Failed to restore processes after update failure: %v", err))
+			fmt.Println(ui.Warning(fmt.Sprintf("[WARN] Failed to restore app processes: %v", err)))
+		} else {
+			pm.Log(id, "Processes restored after update failure")
+			fmt.Println(ui.Warning("[WARN] Update failed, but app processes were restored."))
+		}
+	}()
+
 	candidateDir := filepath.Join(stageRoot, "candidate")
 	if err := os.RemoveAll(candidateDir); err != nil && !os.IsNotExist(err) {
 		pm.Log(id, err.Error())
@@ -158,9 +184,32 @@ func Update(appID string) error {
 		return fmt.Errorf("failed to install update package: %w", err)
 	}
 
+	beforeStatus, err := processManager.Status(config.AppID)
+	if err != nil {
+		pm.Log(id, err.Error())
+		pm.Fail(id)
+		return fmt.Errorf("failed to check app process status before update: %w", err)
+	}
+	runningBefore = runningProcessNames(beforeStatus.Processes)
+
+	if len(runningBefore) > 0 {
+		pm.Update(id, "preflight", "stopping app processes", 85)
+		pm.Log(id, fmt.Sprintf("Stopping app processes: %s", strings.Join(runningBefore, ", ")))
+		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Stopping app %s before applying update...", config.AppID)))
+		if _, err := processManager.Stop(config.AppID); err != nil {
+			pm.Log(id, err.Error())
+			pm.Fail(id)
+			return fmt.Errorf("failed to stop app processes before applying update: %w", err)
+		}
+		stoppedForUpdate = true
+		if runtime.GOOS == "windows" {
+			time.Sleep(700 * time.Millisecond)
+		}
+	}
+
 	pm.Update(id, "apply", "applying update", 90)
 	pm.Log(id, "Applying update to install path")
-	if err := replaceInstall(candidateDir, config.InstallPath); err != nil {
+	if err := replaceInstall(config.AppID, candidateDir, config.InstallPath); err != nil {
 		pm.Log(id, err.Error())
 		pm.Fail(id)
 		return err
@@ -173,22 +222,15 @@ func Update(appID string) error {
 		return fmt.Errorf("failed to run post-update preset tasks: %w", err)
 	}
 
-	processManager, err := process.NewManager()
-	if err != nil {
-		pm.Log(id, err.Error())
-		pm.Fail(id)
-		return fmt.Errorf("failed to initialize process manager: %w", err)
-	}
-
 	if _, err := processManager.SyncAppURL(config.AppID); err != nil {
 		pm.Log(id, err.Error())
 		pm.Fail(id)
 		return fmt.Errorf("failed to sync APP_URL after update: %w", err)
 	}
 
-	targets := preset.RestartProcessTargets(config.Preset)
-	if len(targets) > 0 {
-		if _, err := processManager.RestartNamed(config.AppID, targets...); err != nil {
+	restartTargets := computeRestartTargets(config.Preset, runningBefore)
+	if len(restartTargets) > 0 {
+		if _, err := processManager.RestartNamed(config.AppID, restartTargets...); err != nil {
 			pm.Log(id, err.Error())
 			pm.Fail(id)
 			return fmt.Errorf("failed to restart preset processes: %w", err)
@@ -207,7 +249,67 @@ func Update(appID string) error {
 	pm.Log(id, "Update completed")
 	pm.Complete(id)
 	fmt.Println(ui.Success("[OK] Update completed"))
+	updateSucceeded = true
 	return nil
+}
+
+func runningProcessNames(processes []process.Process) []string {
+	if len(processes) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, proc := range processes {
+		if !strings.EqualFold(strings.TrimSpace(proc.Status), "running") {
+			continue
+		}
+		name := strings.TrimSpace(proc.Name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
+func computeRestartTargets(presetName string, runningBefore []string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+
+	for _, name := range runningBefore {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, strings.TrimSpace(name))
+	}
+
+	// If the app was running before update, also ensure preset critical targets are restarted.
+	if len(out) > 0 {
+		for _, name := range preset.RestartProcessTargets(presetName) {
+			key := strings.ToLower(strings.TrimSpace(name))
+			if key == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, strings.TrimSpace(name))
+		}
+	}
+
+	return out
 }
 
 func shouldDownloadUpdateArchive(path string, maxAge time.Duration) (bool, error) {
@@ -269,7 +371,7 @@ func isValidZipArchive(path string) (bool, error) {
 	return true, nil
 }
 
-func replaceInstall(candidatePath string, installPath string) error {
+func replaceInstall(appID string, candidatePath string, installPath string) error {
 	current := filepath.Clean(strings.TrimSpace(installPath))
 	if current == "" {
 		return fmt.Errorf("install path is empty")
@@ -287,14 +389,20 @@ func replaceInstall(candidatePath string, installPath string) error {
 		return fmt.Errorf("failed to clean backup path: %w", err)
 	}
 
-	if err := os.Rename(current, backup); err != nil {
+	if err := renameWithRetry(current, backup); err != nil {
+		if isWindowsDirBusyError(err) {
+			return fmt.Errorf("failed to backup current installation: %w\n\n%s", err, windowsLockHelp(appID, current))
+		}
 		return fmt.Errorf("failed to backup current installation: %w", err)
 	}
 
-	if err := os.Rename(candidatePath, current); err != nil {
-		rollbackErr := os.Rename(backup, current)
+	if err := renameWithRetry(candidatePath, current); err != nil {
+		rollbackErr := renameWithRetry(backup, current)
 		if rollbackErr != nil {
 			return fmt.Errorf("failed to apply update and rollback failed: %v; rollback error: %v", err, rollbackErr)
+		}
+		if isWindowsDirBusyError(err) {
+			return fmt.Errorf("failed to apply update: %w\n\n%s", err, windowsLockHelp(appID, current))
 		}
 		return fmt.Errorf("failed to apply update: %w", err)
 	}
@@ -304,6 +412,90 @@ func replaceInstall(candidatePath string, installPath string) error {
 	}
 
 	return nil
+}
+
+func renameWithRetry(from, to string) error {
+	src := filepath.Clean(strings.TrimSpace(from))
+	dst := filepath.Clean(strings.TrimSpace(to))
+	if src == "" || dst == "" {
+		return fmt.Errorf("invalid rename path")
+	}
+
+	if runtime.GOOS != "windows" {
+		return os.Rename(src, dst)
+	}
+
+	// Windows may keep handles for a short time after process termination or due to AV scans.
+	const attempts = 8
+	backoff := 200 * time.Millisecond
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		err := os.Rename(src, dst)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !isWindowsDirBusyError(err) {
+			return err
+		}
+		time.Sleep(backoff)
+		if backoff < 2*time.Second {
+			backoff *= 2
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("unknown windows file lock")
+	}
+	return fmt.Errorf("rename failed after retries (source=%s, target=%s): %w", src, dst, lastErr)
+}
+
+func isWindowsDirBusyError(err error) bool {
+	if err == nil || runtime.GOOS != "windows" {
+		return false
+	}
+
+	text := strings.ToLower(strings.TrimSpace(err.Error()))
+
+	if matchesWindowsLockText(text) {
+		return true
+	}
+
+	for unwrapped := errors.Unwrap(err); unwrapped != nil; unwrapped = errors.Unwrap(unwrapped) {
+		if matchesWindowsLockText(strings.ToLower(strings.TrimSpace(unwrapped.Error()))) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func matchesWindowsLockText(text string) bool {
+	if strings.TrimSpace(text) == "" {
+		return false
+	}
+
+	return strings.Contains(text, "being used by another process") ||
+		strings.Contains(text, "used by another process") ||
+		strings.Contains(text, "access is denied") ||
+		strings.Contains(text, "permission denied")
+}
+
+func windowsLockHelp(appID string, installPath string) string {
+	id := strings.TrimSpace(appID)
+	if id == "" {
+		id = "<app_id>"
+	}
+	path := strings.TrimSpace(installPath)
+	if path == "" {
+		path = "<app_path>"
+	}
+
+	return fmt.Sprintf(
+		"Windows file-lock detected. To fix:\n- Stop app processes: m2apps app stop %s\n- Close terminals/editors using: %s\n- Retry update after a few seconds\n",
+		id,
+		path,
+	)
 }
 
 func printUpdateProgress(read, total int64) {
