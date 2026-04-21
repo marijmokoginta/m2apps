@@ -134,8 +134,8 @@ func Update(appID string) error {
 	}
 	fmt.Println()
 	fmt.Println(ui.Success("[OK] Update package downloaded"))
-	pm.Update(id, "install", "running installer", 65)
-	pm.Log(id, "Update package downloaded")
+	pm.Update(id, "preflight", "preparing update", 65)
+	pm.Log(id, "Update package downloaded, preparing update")
 
 	processManager, err := process.NewManager()
 	if err != nil {
@@ -161,6 +161,33 @@ func Update(appID string) error {
 		}
 	}()
 
+	// Stop app processes BEFORE running the installer.
+	//
+	// The installer works entirely in candidateDir (a staging directory), so stopping earlier
+	// is safe and reduces the chance of file-lock errors when applying the update.
+	beforeStatus, err := processManager.Status(config.AppID)
+	if err != nil {
+		pm.Log(id, err.Error())
+		pm.Fail(id)
+		return fmt.Errorf("failed to check app process status before update: %w", err)
+	}
+	runningBefore = runningProcessNames(beforeStatus.Processes)
+
+	if len(runningBefore) > 0 {
+		pm.Update(id, "preflight", "stopping app processes", 70)
+		pm.Log(id, fmt.Sprintf("Stopping app processes: %s", strings.Join(runningBefore, ", ")))
+		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Stopping app %s before staging update...", config.AppID)))
+		if _, err := processManager.Stop(config.AppID); err != nil {
+			pm.Log(id, err.Error())
+			pm.Fail(id)
+			return fmt.Errorf("failed to stop app processes before staging update: %w", err)
+		}
+		stoppedForUpdate = true
+		if runtime.GOOS == "windows" {
+			time.Sleep(700 * time.Millisecond)
+		}
+	}
+
 	candidateDir := filepath.Join(stageRoot, "candidate")
 	if err := os.RemoveAll(candidateDir); err != nil && !os.IsNotExist(err) {
 		pm.Log(id, err.Error())
@@ -178,33 +205,12 @@ func Update(appID string) error {
 		Mode:            installer.ModeUpdate,
 	}
 
+	pm.Update(id, "install", "running installer", 78)
+	pm.Log(id, "Running update installer in staging directory")
 	if err := installer.Install(installCtx); err != nil {
 		pm.Log(id, err.Error())
 		pm.Fail(id)
 		return fmt.Errorf("failed to install update package: %w", err)
-	}
-
-	beforeStatus, err := processManager.Status(config.AppID)
-	if err != nil {
-		pm.Log(id, err.Error())
-		pm.Fail(id)
-		return fmt.Errorf("failed to check app process status before update: %w", err)
-	}
-	runningBefore = runningProcessNames(beforeStatus.Processes)
-
-	if len(runningBefore) > 0 {
-		pm.Update(id, "preflight", "stopping app processes", 85)
-		pm.Log(id, fmt.Sprintf("Stopping app processes: %s", strings.Join(runningBefore, ", ")))
-		fmt.Println(ui.Info(fmt.Sprintf("[INFO] Stopping app %s before applying update...", config.AppID)))
-		if _, err := processManager.Stop(config.AppID); err != nil {
-			pm.Log(id, err.Error())
-			pm.Fail(id)
-			return fmt.Errorf("failed to stop app processes before applying update: %w", err)
-		}
-		stoppedForUpdate = true
-		if runtime.GOOS == "windows" {
-			time.Sleep(700 * time.Millisecond)
-		}
 	}
 
 	pm.Update(id, "apply", "applying update", 90)
