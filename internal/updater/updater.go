@@ -1,6 +1,7 @@
 package updater
 
 import (
+	"archive/zip"
 	"fmt"
 	"m2apps/internal/downloader"
 	"m2apps/internal/github"
@@ -9,11 +10,13 @@ import (
 	"m2apps/internal/process"
 	"m2apps/internal/progress"
 	"m2apps/internal/storage"
+	"m2apps/internal/system"
 	"m2apps/internal/ui"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func Update(appID string) error {
@@ -83,24 +86,25 @@ func Update(appID string) error {
 		return fmt.Errorf("Asset not found in selected release")
 	}
 
-	stageRoot := filepath.Join(filepath.Dir(config.InstallPath), ".m2apps_update_stage", config.AppID)
-	if err := os.RemoveAll(stageRoot); err != nil {
-		pm.Log(id, err.Error())
-		pm.Fail(id)
-		return fmt.Errorf("failed to clean update stage directory: %w", err)
-	}
+	stageRoot := filepath.Join(system.GetBaseDir(), "update_stage", config.AppID)
 	if err := os.MkdirAll(stageRoot, 0o755); err != nil {
 		pm.Log(id, err.Error())
 		pm.Fail(id)
 		return fmt.Errorf("failed to create update stage directory: %w", err)
 	}
-	defer os.RemoveAll(stageRoot)
 
 	downloadPath := filepath.Join(stageRoot, "downloads", asset.Name)
 	if err := os.MkdirAll(filepath.Dir(downloadPath), 0o755); err != nil {
 		pm.Log(id, err.Error())
 		pm.Fail(id)
 		return fmt.Errorf("failed to create download directory: %w", err)
+	}
+
+	shouldDownload, err := shouldDownloadUpdateArchive(downloadPath, 30*24*time.Hour)
+	if err != nil {
+		pm.Log(id, err.Error())
+		pm.Fail(id)
+		return err
 	}
 
 	fmt.Println(ui.Info("[INFO] Downloading update..."))
@@ -117,10 +121,14 @@ func Update(appID string) error {
 			pm.Update(id, "download", "downloading update package", 30+(percent*30/100))
 		}
 	}
-	if err := dl.Download(asset.URL, downloadPath, downloadProgress); err != nil {
-		pm.Log(id, err.Error())
-		pm.Fail(id)
-		return err
+	if shouldDownload {
+		if err := dl.Download(asset.URL, downloadPath, downloadProgress); err != nil {
+			pm.Log(id, err.Error())
+			pm.Fail(id)
+			return err
+		}
+	} else {
+		pm.Log(id, fmt.Sprintf("Reusing cached archive %s", filepath.Base(downloadPath)))
 	}
 	fmt.Println()
 	fmt.Println(ui.Success("[OK] Update package downloaded"))
@@ -128,6 +136,12 @@ func Update(appID string) error {
 	pm.Log(id, "Update package downloaded")
 
 	candidateDir := filepath.Join(stageRoot, "candidate")
+	if err := os.RemoveAll(candidateDir); err != nil && !os.IsNotExist(err) {
+		pm.Log(id, err.Error())
+		pm.Fail(id)
+		return fmt.Errorf("failed to clean update candidate directory: %w", err)
+	}
+	defer os.RemoveAll(candidateDir)
 	installCtx := installer.InstallContext{
 		ZipPath:         downloadPath,
 		TargetDir:       candidateDir,
@@ -135,6 +149,7 @@ func Update(appID string) error {
 		AppID:           config.AppID,
 		ProgressManager: pm,
 		ProgressAppID:   id,
+		Mode:            installer.ModeUpdate,
 	}
 
 	if err := installer.Install(installCtx); err != nil {
@@ -193,6 +208,65 @@ func Update(appID string) error {
 	pm.Complete(id)
 	fmt.Println(ui.Success("[OK] Update completed"))
 	return nil
+}
+
+func shouldDownloadUpdateArchive(path string, maxAge time.Duration) (bool, error) {
+	target := strings.TrimSpace(path)
+	if target == "" {
+		return true, fmt.Errorf("update archive path is empty")
+	}
+	if maxAge <= 0 {
+		maxAge = 30 * 24 * time.Hour
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("failed to check archive cache %s: %w", target, err)
+	}
+	if info.IsDir() {
+		return false, fmt.Errorf("archive cache path is a directory: %s", target)
+	}
+	if info.Size() <= 0 {
+		return true, nil
+	}
+
+	age := time.Since(info.ModTime())
+	if age > maxAge {
+		return true, nil
+	}
+
+	ok, err := isValidZipArchive(target)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		_ = os.Remove(target)
+		return true, nil
+	}
+
+	return false, nil
+}
+
+func isValidZipArchive(path string) (bool, error) {
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "not a valid zip file") ||
+			strings.Contains(lower, "zip: not a valid zip file") ||
+			strings.Contains(lower, "unexpected eof") {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to validate archive %s: %w", path, err)
+	}
+	defer reader.Close()
+
+	if len(reader.File) == 0 {
+		return false, nil
+	}
+	return true, nil
 }
 
 func replaceInstall(candidatePath string, installPath string) error {

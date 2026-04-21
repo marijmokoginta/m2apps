@@ -20,6 +20,7 @@ type InstallContext struct {
 	AppID           string
 	ProgressManager *progress.Manager
 	ProgressAppID   string
+	Mode            string
 
 	// DBSetupFunc is an optional hook called after files are extracted and
 	// before preset commands run. Use it to inject DB configuration into the
@@ -27,6 +28,11 @@ type InstallContext struct {
 	// workDir is the temporary extraction directory.
 	DBSetupFunc func(workDir string) error
 }
+
+const (
+	ModeInstall = "install"
+	ModeUpdate  = "update"
+)
 
 func Install(ctx InstallContext) error {
 	if err := logger.Init(); err != nil {
@@ -70,12 +76,31 @@ func Install(ctx InstallContext) error {
 		}
 	}
 
-	reportProgress(ctx, "install", "running preset", 78, "Running preset")
-	fmt.Println(ui.Info("[INFO] Running installation preset..."))
-	if err := preset.RunInstallPreset(ctx.Preset, tempDir); err != nil {
-		return err
+	mode := strings.ToLower(strings.TrimSpace(ctx.Mode))
+	if mode == "" {
+		mode = ModeInstall
 	}
-	fmt.Println(ui.Success("[OK] Preset execution completed"))
+
+	switch mode {
+	case ModeInstall:
+		reportProgress(ctx, "install", "running preset", 78, "Running preset")
+		fmt.Println(ui.Info("[INFO] Running installation preset..."))
+		if err := preset.RunInstallPreset(ctx.Preset, tempDir); err != nil {
+			return err
+		}
+		fmt.Println(ui.Success("[OK] Preset execution completed"))
+
+	case ModeUpdate:
+		reportProgress(ctx, "install", "running preset", 78, "Running preset")
+		fmt.Println(ui.Info("[INFO] Running update preset..."))
+		if err := preset.RunUpdatePreset(ctx.Preset, tempDir); err != nil {
+			return err
+		}
+		fmt.Println(ui.Success("[OK] Preset execution completed"))
+
+	default:
+		return fmt.Errorf("invalid install mode: %s", mode)
+	}
 
 	reportProgress(ctx, "install", "moving installed files", 86, "Moving installed files")
 	fmt.Println(ui.Info("[INFO] Moving installed files..."))

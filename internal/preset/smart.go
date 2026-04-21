@@ -18,6 +18,7 @@ type smartStep struct {
 
 type presetHandler struct {
 	Install        []smartStep
+	Update         []smartStep
 	PostUpdate     []string
 	OnAppURLChange []string
 	RestartTargets []string
@@ -40,6 +41,51 @@ func RunInstallPreset(name, workDir string) error {
 
 	total := len(handler.Install)
 	for i, step := range handler.Install {
+		if step.BeforeRun != nil {
+			if err := step.BeforeRun(workDir); err != nil {
+				return err
+			}
+		}
+
+		if step.ShouldRun != nil {
+			shouldRun, reason, err := step.ShouldRun(workDir)
+			if err != nil {
+				return err
+			}
+			if !shouldRun {
+				msg := strings.TrimSpace(reason)
+				if msg == "" {
+					msg = "already satisfied"
+				}
+				fmt.Println(ui.Info(fmt.Sprintf("[SKIP] %s (%s)", step.Command, msg)))
+				continue
+			}
+		}
+
+		if err := runCommandStep(workDir, step.Command, i+1, total); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func RunUpdatePreset(name, workDir string) error {
+	handler, ok := presetHandlers[normalizePreset(name)]
+	if !ok {
+		steps, err := GetPreset(name)
+		if err != nil {
+			return err
+		}
+		return RunSteps(steps, workDir)
+	}
+
+	if len(handler.Update) == 0 {
+		return nil
+	}
+
+	total := len(handler.Update)
+	for i, step := range handler.Update {
 		if step.BeforeRun != nil {
 			if err := step.BeforeRun(workDir); err != nil {
 				return err
@@ -173,6 +219,53 @@ func newLaravelPresetHandler() presetHandler {
 					return true, "", nil
 				},
 			},
+			{Command: "php artisan optimize:clear"},
+		},
+		Update: []smartStep{
+			{
+				Command: "composer install",
+				ShouldRun: func(workDir string) (bool, string, error) {
+					ok, err := pathExists(filepath.Join(workDir, "vendor"))
+					if err != nil {
+						return false, "", err
+					}
+					if ok {
+						return false, "vendor directory already exists", nil
+					}
+					return true, "", nil
+				},
+			},
+			{
+				Command:   "php artisan migrate --force",
+				BeforeRun: ensureLaravelEnvFile,
+			},
+			{
+				Command: "npm install",
+				ShouldRun: func(workDir string) (bool, string, error) {
+					ok, err := pathExists(filepath.Join(workDir, "public", "build"))
+					if err != nil {
+						return false, "", err
+					}
+					if ok {
+						return false, "public/build already exists", nil
+					}
+					return true, "", nil
+				},
+			},
+			{
+				Command: "npm run build",
+				ShouldRun: func(workDir string) (bool, string, error) {
+					ok, err := pathExists(filepath.Join(workDir, "public", "build"))
+					if err != nil {
+						return false, "", err
+					}
+					if ok {
+						return false, "public/build already exists", nil
+					}
+					return true, "", nil
+				},
+			},
+			{Command: "php artisan storage:link"},
 			{Command: "php artisan optimize:clear"},
 		},
 		PostUpdate:     []string{"php artisan storage:link", "php artisan optimize:clear"},
