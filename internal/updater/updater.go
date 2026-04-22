@@ -2,9 +2,9 @@ package updater
 
 import (
 	"archive/zip"
-	"errors"
 	"fmt"
 	"m2apps/internal/downloader"
+	"m2apps/internal/fileops"
 	"m2apps/internal/github"
 	"m2apps/internal/installer"
 	"m2apps/internal/preset"
@@ -395,19 +395,19 @@ func replaceInstall(appID string, candidatePath string, installPath string) erro
 		return fmt.Errorf("failed to clean backup path: %w", err)
 	}
 
-	if err := renameWithRetry(current, backup); err != nil {
-		if isWindowsDirBusyError(err) {
+	if err := fileops.RenameWithRetry(current, backup); err != nil {
+		if fileops.IsWindowsDirBusyError(err) {
 			return fmt.Errorf("failed to backup current installation: %w\n\n%s", err, windowsLockHelp(appID, current))
 		}
 		return fmt.Errorf("failed to backup current installation: %w", err)
 	}
 
-	if err := renameWithRetry(candidatePath, current); err != nil {
-		rollbackErr := renameWithRetry(backup, current)
+	if err := fileops.RenameWithRetry(candidatePath, current); err != nil {
+		rollbackErr := fileops.RenameWithRetry(backup, current)
 		if rollbackErr != nil {
 			return fmt.Errorf("failed to apply update and rollback failed: %v; rollback error: %v", err, rollbackErr)
 		}
-		if isWindowsDirBusyError(err) {
+		if fileops.IsWindowsDirBusyError(err) {
 			return fmt.Errorf("failed to apply update: %w\n\n%s", err, windowsLockHelp(appID, current))
 		}
 		return fmt.Errorf("failed to apply update: %w", err)
@@ -418,73 +418,6 @@ func replaceInstall(appID string, candidatePath string, installPath string) erro
 	}
 
 	return nil
-}
-
-func renameWithRetry(from, to string) error {
-	src := filepath.Clean(strings.TrimSpace(from))
-	dst := filepath.Clean(strings.TrimSpace(to))
-	if src == "" || dst == "" {
-		return fmt.Errorf("invalid rename path")
-	}
-
-	if runtime.GOOS != "windows" {
-		return os.Rename(src, dst)
-	}
-
-	// Windows may keep handles for a short time after process termination or due to AV scans.
-	const attempts = 8
-	backoff := 200 * time.Millisecond
-	var lastErr error
-	for i := 0; i < attempts; i++ {
-		err := os.Rename(src, dst)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		if !isWindowsDirBusyError(err) {
-			return err
-		}
-		time.Sleep(backoff)
-		if backoff < 2*time.Second {
-			backoff *= 2
-		}
-	}
-
-	if lastErr == nil {
-		lastErr = fmt.Errorf("unknown windows file lock")
-	}
-	return fmt.Errorf("rename failed after retries (source=%s, target=%s): %w", src, dst, lastErr)
-}
-
-func isWindowsDirBusyError(err error) bool {
-	if err == nil || runtime.GOOS != "windows" {
-		return false
-	}
-
-	text := strings.ToLower(strings.TrimSpace(err.Error()))
-
-	if matchesWindowsLockText(text) {
-		return true
-	}
-
-	for unwrapped := errors.Unwrap(err); unwrapped != nil; unwrapped = errors.Unwrap(unwrapped) {
-		if matchesWindowsLockText(strings.ToLower(strings.TrimSpace(unwrapped.Error()))) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func matchesWindowsLockText(text string) bool {
-	if strings.TrimSpace(text) == "" {
-		return false
-	}
-
-	return strings.Contains(text, "being used by another process") ||
-		strings.Contains(text, "used by another process") ||
-		strings.Contains(text, "access is denied") ||
-		strings.Contains(text, "permission denied")
 }
 
 func windowsLockHelp(appID string, installPath string) string {

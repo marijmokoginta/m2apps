@@ -2,6 +2,7 @@ package installer
 
 import (
 	"fmt"
+	"m2apps/internal/fileops"
 	"m2apps/internal/logger"
 	"m2apps/internal/progress"
 	"m2apps/internal/ui"
@@ -127,7 +128,7 @@ func moveExtractedFiles(fromDir string, toDir string) error {
 			return fmt.Errorf("failed to overwrite target path %s: %w", dstPath, err)
 		}
 
-		if err := os.Rename(srcPath, dstPath); err != nil {
+		if err := fileops.RenameWithRetry(srcPath, dstPath); err != nil {
 			return fmt.Errorf("failed to move %s: %w", name, err)
 		}
 	}
