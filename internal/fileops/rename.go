@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -55,6 +56,17 @@ func RenameWithRetry(from, to string) error {
 func IsWindowsDirBusyError(err error) bool {
 	if err == nil || runtime.GOOS != "windows" {
 		return false
+	}
+
+	// Prefer error codes over message matching:
+	// - Locale independent (messages are translated)
+	// - Covers cases like ERROR_LOCK_VIOLATION where the English text differs
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		switch errno {
+		case syscall.Errno(5), syscall.Errno(32), syscall.Errno(33), syscall.Errno(145):
+			return true
+		}
 	}
 
 	text := strings.ToLower(strings.TrimSpace(err.Error()))
