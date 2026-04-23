@@ -542,9 +542,10 @@ func windowsLockHelp(appID string, installPath string) string {
 	}
 
 	return fmt.Sprintf(
-		"Windows file-lock detected. To fix:\n- Stop app processes: m2apps app stop %s\n- Close terminals/editors using: %s\n- Retry update after a few seconds\n",
-		id,
+		"Windows file-lock detected. The install directory is in use:\n- %s\n\nTo fix:\n- Stop m2apps managed processes: m2apps app stop %s\n- If using Laragon or XAMPP: stop Apache/Nginx services before updating\n- Wait a few seconds if antivirus (Windows Defender) is scanning newly extracted files\n- Close File Explorer windows opened in the app directory\n- Close editors/terminals (VS Code, etc.) that have the folder open\n- Check Task Manager for lingering php.exe/node.exe and stop them if needed\n\nThen re-run:\n- m2apps update %s\n",
 		path,
+		id,
+		id,
 	)
 }
 
