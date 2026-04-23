@@ -292,11 +292,65 @@ func waitForDirectoryUnlocked(appID, installPath string, timeout time.Duration) 
 	for time.Now().Before(deadline) {
 		err := os.Rename(path, probe)
 		if err == nil {
-			// Always restore immediately.
-			if restoreErr := fileops.RenameWithRetry(probe, path); restoreErr != nil {
-				return fmt.Errorf("directory unlock probe succeeded but failed to restore original path: %w", restoreErr)
+			restored := false
+			defer func() {
+				if restored {
+					return
+				}
+				// Best-effort rollback. If this fails, the caller will see an error
+				// that includes manual recovery instructions.
+				_ = fileops.RenameWithRetry(probe, path)
+			}()
+
+			// Restore immediately, but keep retrying until timeout.
+			restoreSleep := 150 * time.Millisecond
+			for time.Now().Before(deadline) {
+				restoreErr := os.Rename(probe, path)
+				if restoreErr == nil {
+					restored = true
+					return nil
+				}
+
+				lastErr = restoreErr
+				if !fileops.IsWindowsDirBusyError(restoreErr) {
+					// Try helper-based restore once as a fallback (covers wrapped errors).
+					if err := fileops.RenameWithRetry(probe, path); err == nil {
+						restored = true
+						return nil
+					}
+
+					return fmt.Errorf(
+						"directory unlock probe succeeded but failed to restore original path: %w\n\nThe installation directory may now be located at:\n- %s\nExpected location:\n- %s\n\n%s",
+						restoreErr,
+						probe,
+						path,
+						windowsLockHelp(appID, path),
+					)
+				}
+
+				time.Sleep(restoreSleep)
+				if restoreSleep < 600*time.Millisecond {
+					restoreSleep += 75 * time.Millisecond
+				}
 			}
-			return nil
+
+			// Final attempt before failing.
+			if err := fileops.RenameWithRetry(probe, path); err == nil {
+				restored = true
+				return nil
+			}
+
+			if lastErr == nil {
+				lastErr = fmt.Errorf("timeout waiting for directory restore")
+			}
+			return fmt.Errorf(
+				"directory unlock probe succeeded but failed to restore original path within %s: %w\n\nThe installation directory may now be located at:\n- %s\nExpected location:\n- %s\n\n%s",
+				timeout,
+				lastErr,
+				probe,
+				path,
+				windowsLockHelp(appID, path),
+			)
 		}
 
 		lastErr = err
