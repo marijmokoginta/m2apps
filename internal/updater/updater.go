@@ -183,8 +183,16 @@ func Update(appID string) error {
 			return fmt.Errorf("failed to stop app processes before staging update: %w", err)
 		}
 		stoppedForUpdate = true
-		if runtime.GOOS == "windows" {
-			time.Sleep(700 * time.Millisecond)
+	}
+
+	if runtime.GOOS == "windows" {
+		pm.Update(id, "preflight", "waiting for install directory unlock", 72)
+		pm.Log(id, fmt.Sprintf("Waiting for install directory to be unlocked: %s", config.InstallPath))
+		fmt.Println(ui.Info("[INFO] Waiting for Windows to release file locks..."))
+		if err := waitForDirectoryUnlocked(config.AppID, config.InstallPath, 10*time.Second); err != nil {
+			pm.Log(id, err.Error())
+			pm.Fail(id)
+			return err
 		}
 	}
 
@@ -257,6 +265,55 @@ func Update(appID string) error {
 	fmt.Println(ui.Success("[OK] Update completed"))
 	updateSucceeded = true
 	return nil
+}
+
+func waitForDirectoryUnlocked(appID, installPath string, timeout time.Duration) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+
+	path := filepath.Clean(strings.TrimSpace(installPath))
+	if path == "" {
+		return fmt.Errorf("install path is empty")
+	}
+
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+
+	// Probe by renaming the directory to a temporary path and restoring it.
+	// If rename succeeds, the directory is unlocked.
+	probe := path + ".m2apps_unlock_probe_" + strconv.FormatInt(time.Now().UnixNano(), 10)
+
+	deadline := time.Now().Add(timeout)
+	sleep := 150 * time.Millisecond
+	var lastErr error
+
+	for time.Now().Before(deadline) {
+		err := os.Rename(path, probe)
+		if err == nil {
+			// Always restore immediately.
+			if restoreErr := fileops.RenameWithRetry(probe, path); restoreErr != nil {
+				return fmt.Errorf("directory unlock probe succeeded but failed to restore original path: %w", restoreErr)
+			}
+			return nil
+		}
+
+		lastErr = err
+		if !fileops.IsWindowsDirBusyError(err) {
+			return fmt.Errorf("failed to probe directory unlock: %w", err)
+		}
+
+		time.Sleep(sleep)
+		if sleep < 600*time.Millisecond {
+			sleep += 75 * time.Millisecond
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("timeout waiting for directory unlock")
+	}
+	return fmt.Errorf("install directory is still locked after %s: %w\n\n%s", timeout, lastErr, windowsLockHelp(appID, path))
 }
 
 func runningProcessNames(processes []process.Process) []string {
