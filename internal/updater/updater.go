@@ -2,6 +2,7 @@ package updater
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"m2apps/internal/downloader"
 	"m2apps/internal/fileops"
@@ -18,6 +19,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -228,7 +230,6 @@ func Update(appID string) error {
 		pm.Fail(id)
 		return err
 	}
-	cleanupUpdateArtifacts(config.InstallPath, downloadPath)
 
 	if err := preset.RunPostUpdate(config.Preset, config.InstallPath); err != nil {
 		pm.Log(id, err.Error())
@@ -254,10 +255,30 @@ func Update(appID string) error {
 	config.Version = target.TagName
 	config.Channel = channel
 	if err := store.Save(config.AppID, config); err != nil {
+		// If metadata save fails due to low disk space, try freeing space by
+		// removing the downloaded archive and temp artifacts, then retry once.
+		//
+		// This avoids a self-reinforcing loop where ENOSPC prevents saving,
+		// but the archive is never cleaned up, so retries keep failing.
+		if errors.Is(err, syscall.ENOSPC) {
+			pm.Log(id, fmt.Sprintf("Metadata save failed due to no space left, cleaning update artifacts and retrying: %v", err))
+			fmt.Println(ui.Warning("[WARN] Low disk space detected. Cleaning update artifacts and retrying metadata save..."))
+			cleanupUpdateArtifacts(config.InstallPath, downloadPath)
+			if retryErr := store.Save(config.AppID, config); retryErr == nil {
+				goto afterMetadataSave
+			} else {
+				pm.Log(id, retryErr.Error())
+				pm.Fail(id)
+				return fmt.Errorf("failed to update metadata after cleanup retry: %w", retryErr)
+			}
+		}
 		pm.Log(id, err.Error())
 		pm.Fail(id)
 		return fmt.Errorf("failed to update metadata: %w", err)
 	}
+
+afterMetadataSave:
+	cleanupUpdateArtifacts(config.InstallPath, downloadPath)
 
 	pm.Update(id, "complete", "update completed", 100)
 	pm.Log(id, "Update completed")
