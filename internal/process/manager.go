@@ -232,6 +232,11 @@ func appendEnvCSVUnique(workDir string, key string, additions ...string) (bool, 
 		raw = raw[1 : len(raw)-1]
 		raw = strings.TrimSpace(raw)
 	}
+	// SANCTUM_STATEFUL_DOMAINS often contains spaces and commas, which should be quoted in .env.
+	// Force double-quotes for compatibility across env parsers.
+	if strings.EqualFold(key, "SANCTUM_STATEFUL_DOMAINS") {
+		quote = '"'
+	}
 
 	items := make([]string, 0)
 	seen := make(map[string]struct{})
