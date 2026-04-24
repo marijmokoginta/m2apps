@@ -228,7 +228,6 @@ func Update(appID string) error {
 		pm.Fail(id)
 		return err
 	}
-	cleanupUpdateArtifacts(config.InstallPath, downloadPath)
 
 	if err := preset.RunPostUpdate(config.Preset, config.InstallPath); err != nil {
 		pm.Log(id, err.Error())
@@ -258,6 +257,8 @@ func Update(appID string) error {
 		pm.Fail(id)
 		return fmt.Errorf("failed to update metadata: %w", err)
 	}
+
+	cleanupUpdateArtifacts(config.InstallPath, downloadPath)
 
 	pm.Update(id, "complete", "update completed", 100)
 	pm.Log(id, "Update completed")
