@@ -93,53 +93,36 @@ jobs:
         shell: bash
         run: |
           FILE="changelog/${{ github.ref_name }}.md"
-          if [ ! -f "$FILE" ]; then
-            echo "Changelog file not found!"
-            exit 1
+          if [ -f "$FILE" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changelog file not found, will use auto-generated release notes"
+            echo "found=false" >> "$GITHUB_OUTPUT"
           fi
 
-          echo "body<<EOF" >> "$GITHUB_OUTPUT"
-          cat "$FILE" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-
       - name: Create GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          release_name: Release ${{ github.ref_name }}
-          body: ${{ steps.changelog.outputs.body }}
-          draft: false
-          prerelease: false
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [ "${{ steps.changelog.outputs.found }}" = "true" ]; then
+            gh release create "$TAG" \
+              --title "Release $TAG" \
+              --notes-file "${{ steps.changelog.outputs.file }}"
+          else
+            gh release create "$TAG" \
+              --title "Release $TAG" \
+              --generate-notes
+          fi
 
-      - name: Upload Windows asset
-        uses: actions/upload-release-asset@v1
+      - name: Upload assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: dist/m2apps-windows-amd64.zip
-          asset_name: m2apps-windows-amd64.zip
-          asset_content_type: application/zip
-
-      - name: Upload Linux asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: dist/m2apps-linux-amd64.tar.gz
-          asset_name: m2apps-linux-amd64.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload macOS asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: dist/m2apps-darwin-amd64.tar.gz
-          asset_name: m2apps-darwin-amd64.tar.gz
-          asset_content_type: application/gzip
+        shell: bash
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            dist/m2apps-windows-amd64.zip \
+            dist/m2apps-linux-amd64.tar.gz \
+            dist/m2apps-darwin-amd64.tar.gz
